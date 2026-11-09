@@ -266,7 +266,7 @@ ui.publish('mouse-view', {
 
 常见错误：permission_denied 是策略未允许，不是让 AI 随机更换字节；busy 是现有会话/进程占用；closed/disconnected 需要新通道和新引用；identity_required/ambiguous 要选择身份；timeout 不代表特定电源状态；validation 检查字段类型（毫秒整数不能传 Lua 浮点）；resource_limit/overflow 缩小任务、数据与队列；stale UI 事件重取当前 generation/revision。检查 `tasks` 中后台定时任务的失败，不要只看插件开关是开着。
 
-源码工作区已有独立真实插件 `blackshark-v2`、`am-infinity-97`，其协议、状态映射、监控与显示可用 scripts/script_read 查看后复用。后者一个设备包含鼠标和充电座，读数分开；全零序列号换口可能需重新绑定。`headset-battery` 是模拟示例，不是硬件支持证明。
+Release 的独立设备插件附件包含 `blackshark-v2`、`am-infinity-97`；本体源码和程序包不内置这些插件。解压后按附件中的 INSTALL.txt 安装，并由用户配置宿主查询白名单。插件将协议、状态映射、监控与显示分开；鼠标插件包含充电座，读数独立。全零序列号换口可能需重新绑定。模拟示例不能作为硬件支持证明。
 
 接入格式参考：官方 Codex MCP 文档 https://developers.openai.com/codex/mcp/ 。本文以运行时提供的工具清单和版本为准；未来 API 变化时重新读取随新 EXE 发布的手册。
 

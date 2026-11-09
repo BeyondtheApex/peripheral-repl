@@ -264,7 +264,7 @@ This is a presentation example: 24 is a loading arc length and 100 is fixture da
 
 Common errors: permission_denied means the policy does not authorize that operation, not permission to guess different bytes; busy means another owner; closed/disconnected requires a new channel/reference; identity_required/ambiguous requires explicit selection; timeout proves no particular power state; validation includes incorrect types (Lua floating-point milliseconds are not unsigned integer fields); resource_limit/overflow requires smaller work/data/queues. Stale UI events require fresh generation/revision. Inspect background task errors even when a plugin toggle is enabled.
 
-Source workspaces contain independent real blackshark-v2 and am-infinity-97 packages; inspect them using scripts/script_read. They separate protocol, state mapping, monitoring and presentation. The mouse package includes its dock with independent readings. All-zero serials may require rebinding after moving ports. headset-battery is a simulation, not evidence of physical support.
+The separate device-plugin Release attachment contains blackshark-v2 and am-infinity-97; neither the application source nor its binary package bundles these plugins. Extract it and follow INSTALL.txt to install the packages and configure the host query allowlist. They separate protocol, state mapping, monitoring and presentation. The mouse package includes its dock with independent readings. All-zero serials may require rebinding after moving ports. Simulations are not evidence of physical support.
 
 Client format reference: official Codex MCP documentation https://developers.openai.com/codex/mcp/ . Runtime versions and advertised tool schemas are authoritative; reread the bundled handbook when upgrading.
 

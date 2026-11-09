@@ -47,7 +47,7 @@ impl Application {
                 Ok(json!({"path":path}))
             }
             "ping" => Ok(
-                json!({"version":"0.1.0","framework":"gpui-kit 0.9.0","icons":"Lucide SVG","transport":"authenticated loopback JSON","hardware_access":false}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"framework":"gpui-kit 0.9.0","icons":"Lucide SVG","transport":"authenticated loopback JSON","hardware_access":false}),
             ),
             "snapshot" => {
                 let surfaces=self.surfaces.iter_mut().map(|(id,s)|{

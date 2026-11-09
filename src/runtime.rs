@@ -42,14 +42,12 @@ pub struct Runtime {
 impl Runtime {
     pub fn new(root: impl AsRef<Path>) -> Result<Self> {
         let shared = Shared::default();
-        if let Ok(bytes) = std::fs::read(root.as_ref().join(".peripheral/ui-environment.json")) {
-            if bytes.len() <= 2048 {
-                if let Ok(env) = serde_json::from_slice::<crate::environment::Environment>(&bytes) {
-                    if env.validate().is_ok() {
-                        *shared.environment.lock().unwrap() = env;
-                    }
-                }
-            }
+        if let Ok(bytes) = std::fs::read(root.as_ref().join(".peripheral/ui-environment.json"))
+            && bytes.len() <= 2048
+            && let Ok(env) = serde_json::from_slice::<crate::environment::Environment>(&bytes)
+            && env.validate().is_ok()
+        {
+            *shared.environment.lock().unwrap() = env;
         }
         Ok(Self {
             inner: Arc::new(Inner {
@@ -70,6 +68,10 @@ impl Runtime {
             return self.inner.plugins.dispatch(self, &self.inner.root, &req);
         }
         let name = req["instance"].as_str().unwrap_or("default").to_owned();
+        anyhow::ensure!(
+            !name.starts_with("plugin_") || !matches!(op, "create" | "reset" | "reload" | "load"),
+            "plugin sessions retain their package scope; use plugin_restart or eval for debugging"
+        );
         let _lifecycle = matches!(op, "create" | "destroy" | "reset" | "reload")
             .then(|| self.inner.lifecycle.lock().unwrap());
         match op {
@@ -171,10 +173,6 @@ impl Runtime {
                 Ok(guard.read(after))
             }
             "create" => {
-                anyhow::ensure!(
-                    !name.starts_with("plugin_"),
-                    "plugin_ sessions are managed by plugins; use plugin_enable"
-                );
                 self.create(&name)?;
                 if let Some(config) = req.get("config")
                     && let Err(e) = self.call(&name, json!({"op":"configure","value":config}))

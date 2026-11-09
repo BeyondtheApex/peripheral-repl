@@ -10,6 +10,9 @@ jobs:
       - name: Install stable Rust
         shell: pwsh
         run: rustup update stable
+      - name: Offline runtime regression tests
+        shell: pwsh
+        run: cargo test --locked --lib
       - name: Build application and native adapter
         shell: pwsh
         run: ./build.ps1 -Release

@@ -13,6 +13,8 @@ pub mod native_hid;
 pub mod plugins;
 pub mod protocol;
 pub mod queue;
+#[cfg(test)]
+mod regression_tests;
 pub mod repl;
 pub mod runtime;
 pub mod scheduler;

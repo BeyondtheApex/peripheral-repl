@@ -1,4 +1,10 @@
 use super::*;
+pub(super) fn registration_only(device: Value) -> Value {
+    // Whitelist registration/artwork only, never derived display, samples or
+    // freshness/generation metadata from a previous runtime.
+    json!({"descriptor":device["descriptor"],"image":device["image"],
+        "resource":device["resource"],"state":{},"stale":true})
+}
 pub(super) fn plugin(runtime: &Runtime, manifest: &package::Manifest, state: &State) -> Value {
     let instance = session(&manifest.id);
     let setting = state

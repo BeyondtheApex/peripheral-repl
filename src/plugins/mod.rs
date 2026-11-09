@@ -30,7 +30,7 @@ pub struct Manager {
 impl Manager {
     pub fn new(root: &Path) -> Result<Self> {
         let path = root.join(".peripheral/plugins.json");
-        let settings = if path.exists() {
+        let mut settings: BTreeMap<String, Setting> = if path.exists() {
             let bytes = std::fs::read(path)?;
             anyhow::ensure!(
                 bytes.len() <= 1024 * 1024,
@@ -40,6 +40,11 @@ impl Manager {
         } else {
             BTreeMap::new()
         };
+        // Also sanitize preferences written by older builds: display contained
+        // translated telemetry even when state itself had already been removed.
+        for setting in settings.values_mut() {
+            setting.device = setting.device.take().map(snapshot::registration_only);
+        }
         Ok(Self {
             state: Mutex::new(State {
                 settings,
@@ -201,11 +206,7 @@ impl Manager {
                         .dispatch(json!({"op":"device_snapshot","instance":instance}))
                         .ok()
                         .filter(|v| !v.is_null())
-                        .map(|mut v| {
-                            v["state"] = json!({});
-                            v["stale"] = json!(true);
-                            v
-                        });
+                        .map(snapshot::registration_only);
                     state.settings.insert(id.into(), setting.clone());
                     Self::save(root, &state)?;
                 }

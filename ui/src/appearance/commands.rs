@@ -27,6 +27,7 @@ impl Application {
                 return Ok(json!({}));
             }
             let mut options = options();
+            let previous_environment = environment();
             if op == "appearance_system_changed" && !system_changed() {
                 return Ok(json!({"changed":false}));
             }
@@ -68,7 +69,9 @@ impl Application {
                 s.window.update(cx, |_, w, _| w.refresh())?;
             }
             self.manager(cx, |m, _| m.transition());
-            if self.backend_status == crate::backend_status::BackendStatus::Running {
+            if self.backend_status == crate::backend_status::BackendStatus::Running
+                && previous_environment != environment()
+            {
                 self.backend
                     .command(json!({"op":"ui_environment","value":environment()}))?;
             }

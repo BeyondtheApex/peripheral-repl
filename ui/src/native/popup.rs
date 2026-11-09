@@ -65,15 +65,31 @@ fn dismiss_outside(point: POINT) {
                 && !inside.contains(family)
                 && let Ok(hook) = hook(*h)
             {
-                *pending = true;
-                if dismissed.insert(family.clone()) {
-                    enqueue(hook, json!({"op":"dismiss_popup","surface":if family==crate::dashboard::ID{crate::dashboard::ID}else{&hook.id}}));
+                if dismissed.contains(family) {
+                    *pending = true;
+                } else {
+                    let (reply, _) = mpsc::sync_channel(1);
+                    // A full queue must leave the menu retryable on the next
+                    // outside click instead of permanently suppressing dismissal.
+                    if hook.commands.try_send(Request {
+                        body: json!({"op":"dismiss_popup","surface":if family==crate::dashboard::ID{crate::dashboard::ID}else{&hook.id}}),
+                        reply,
+                        expires: None,
+                    }).is_ok() {
+                        *pending = true;
+                        dismissed.insert(family.clone());
+                    }
                 }
             }
         }
     });
 }
 pub fn show_at(h: usize, parent: Option<usize>) -> Result<()> {
+    MENUS.with(|menus| {
+        if let Some((_, pending)) = menus.borrow_mut().get_mut(&h) {
+            *pending = false;
+        }
+    });
     unsafe {
         hook(h)?.popup.set(true);
         let mut point = POINT::default();
