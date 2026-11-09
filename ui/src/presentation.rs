@@ -98,8 +98,8 @@ fn node(
         .rounded(px(n.style.radius.unwrap_or(0.) * scale))
         .p(px(n.style.padding.unwrap_or(0.) * scale))
         .gap(px(n.style.gap.unwrap_or(6.) * scale))
-        .when_some(n.style.width, |s, v| s.min_w(px(v * scale)))
-        .when_some(n.style.height, |s, v| s.min_h(px(v * scale)))
+        .when_some(n.style.width, |s, v| s.w(px(v * scale)))
+        .when_some(n.style.height, |s, v| s.h(px(v * scale)))
         .when_some(n.style.size, |s, v| {
             s.min_w(px(v * scale)).min_h(px(v * scale))
         });
@@ -141,9 +141,15 @@ fn node(
         }
         Kind::Text => {
             element = element
+                .text_align(match n.style.text_align {
+                    Some(peripheral_ui_protocol::TextAlignment::Center) => TextAlign::Center,
+                    Some(peripheral_ui_protocol::TextAlignment::Right) => TextAlign::Right,
+                    _ => TextAlign::Left,
+                })
                 .text_size(px(n.style.font_size.unwrap_or(14.) * scale))
                 .line_height(px(n.style.font_size.unwrap_or(14.) * 1.4 * scale))
                 .whitespace_nowrap()
+                .when(n.style.width.is_some(), |s| s.truncate())
                 .child(n.text.clone());
         }
         Kind::Icon => {

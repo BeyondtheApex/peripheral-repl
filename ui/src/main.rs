@@ -16,6 +16,8 @@ mod management_commands;
 mod manager;
 mod model;
 mod native;
+mod notifications;
+mod permissions;
 mod plugin_commands;
 mod presentation;
 mod publications;
@@ -91,7 +93,7 @@ fn main() -> Result<()> {
             }
             application.start_watch();
             if autostart && let Err(error) = application.control_backend("start", cx) {
-                application.status(format!("{error:#}"), cx);
+                application.notify("error", format!("{error:#}"), cx);
                 if let Some(main) = application.surfaces.get("main") {
                     native::show(main.hwnd, true);
                 }
@@ -110,7 +112,7 @@ fn main() -> Result<()> {
                     let result = cx.update(|cx| {
                         let result = application.command(&request.body, cx);
                         if let Err(error) = &result {
-                            application.status(format!("{error:#}"), cx);
+                            application.notify("error", format!("{error:#}"), cx);
                         }
                         match result {
                             Ok(result) => json!({"ok":true,"result":result}),

@@ -54,11 +54,23 @@ impl Application {
         }
     }
     pub fn status(&mut self, message: String, cx: &mut App) {
-        self.manager(cx, |m, _| {
-            m.status = message;
-        });
+        self.notify("info", message, cx);
     }
     pub fn command(&mut self, v: &Value, cx: &mut App) -> Result<Value> {
+        if v["op"] == "notice_dismiss" {
+            self.manager(cx, |m, _| {
+                if m.notice
+                    .as_ref()
+                    .is_some_and(|n| Some(n.revision) == v["revision"].as_u64())
+                {
+                    m.notice = None;
+                }
+            });
+            return Ok(json!({}));
+        }
+        if let Some(result) = self.permissions_command(v, cx) {
+            return result;
+        }
         if let Some(result) = self.startup_command(v, cx) {
             return result;
         }

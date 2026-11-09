@@ -88,7 +88,8 @@ pub struct OutputRule {
     pub interface: i32,
     pub packets: Vec<String>,
 }
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Policy {
     #[serde(default)]
     pub name: String,
@@ -161,6 +162,7 @@ pub trait Resource {
 
 #[derive(Clone)]
 pub struct Context {
+    pub policy: Arc<Policy>,
     pub translations: Rc<RefCell<crate::environment::Translations>>,
     pub environment_callback: Rc<RefCell<Option<mlua::Function>>>,
     pub generation: String,
@@ -186,6 +188,7 @@ impl Context {
     pub fn new(name: String, shared: Arc<Shared>, root: PathBuf) -> Self {
         Self {
             generation: uuid::Uuid::new_v4().to_string(),
+            policy: Arc::new(shared.policy.clone()),
             environment_callback: Default::default(),
             translations: Default::default(),
             name,
@@ -389,10 +392,20 @@ impl UserData for Buffer {
 
 pub fn to_json(value: LValue, depth: usize) -> mlua::Result<Value> {
     let mut remaining = 2048;
-    convert(value, depth, &mut remaining)
+    convert(value, depth, 8, &mut remaining)
 }
-fn convert(value: LValue, depth: usize, remaining: &mut usize) -> mlua::Result<Value> {
-    if depth > 8 || *remaining == 0 {
+/// UI trees contain a children array between each node level. Keep their bounded
+/// conversion separate from general REPL values; Surface::validate checks nodes.
+pub fn to_ui_json(value: LValue) -> mlua::Result<Value> {
+    convert(value, 0, 32, &mut 8192)
+}
+fn convert(
+    value: LValue,
+    depth: usize,
+    max_depth: usize,
+    remaining: &mut usize,
+) -> mlua::Result<Value> {
+    if depth > max_depth || *remaining == 0 {
         return Err(err(
             "result nesting/entry budget exceeded (cycles are not serializable)",
         ));
@@ -430,7 +443,7 @@ fn convert(value: LValue, depth: usize, remaining: &mut usize) -> mlua::Result<V
                 if key.len() > 256 {
                     return Err(err("table key too long"));
                 }
-                map.insert(key, convert(v, depth + 1, remaining)?);
+                map.insert(key, convert(v, depth + 1, max_depth, remaining)?);
             }
             if map.is_empty() {
                 // Preserve mlua's array marker on empty backend lists. Plain {}
@@ -672,6 +685,11 @@ pub fn load_policy(path: &std::path::Path) -> Result<Policy> {
         bail!("policy too large");
     }
     let policy: Policy = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+    validate_policy(&policy)?;
+    Ok(policy)
+}
+
+pub fn validate_policy(policy: &Policy) -> Result<()> {
     if policy.output_rules.len() + policy.hid_rules.len() > 64 {
         bail!("too many rules");
     }
@@ -698,5 +716,5 @@ pub fn load_policy(path: &std::path::Path) -> Result<Policy> {
     }
     crate::bluetooth::validate_rules(&policy.ble_write_rules)?;
     crate::bluetooth::validate_pair_rules(&policy.ble_pair_rules)?;
-    Ok(policy)
+    Ok(())
 }

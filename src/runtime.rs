@@ -133,13 +133,15 @@ impl Runtime {
             "ui_snapshot" => Ok(self.shared.ui.lock().unwrap().snapshot()),
             "reset" => {
                 let config = self.call(&name, json!({"op":"config"}))?;
+                let policy =
+                    serde_json::from_value(self.call(&name, json!({"op":"session_policy"}))?)?;
                 self.destroy(&name)?;
-                self.create(&name)?;
+                self.create_at(&name, self.inner.root.clone(), policy)?;
                 self.call(&name, json!({"op":"configure","value":config}))?;
                 Ok(json!({"reset":name}))
             }
             "ping" => Ok(
-                json!({"runtime_id":self.inner.identity,"ui_protocol":peripheral_ui_protocol::VERSION,"plugin_api":2,"version":env!("CARGO_PKG_VERSION"),"api_version":2,"policy":if self.shared.policy.name.is_empty(){"read-only"}else{&self.shared.policy.name},"root":self.inner.root,"transports":["hid","ble","mock"]}),
+                json!({"runtime_id":self.inner.identity,"ui_protocol":peripheral_ui_protocol::VERSION,"plugin_api":2,"plugin_permissions":1,"version":env!("CARGO_PKG_VERSION"),"api_version":2,"policy":if self.shared.policy.name.is_empty(){"read-only"}else{&self.shared.policy.name},"root":self.inner.root,"transports":["hid","ble","mock"]}),
             ),
             "instances" => Ok(json!(
                 self.inner
@@ -173,7 +175,13 @@ impl Runtime {
                 Ok(guard.read(after))
             }
             "create" => {
-                self.create(&name)?;
+                if let Some(policy) = req.get("policy") {
+                    let policy: bindings::Policy = serde_json::from_value(policy.clone())?;
+                    bindings::validate_policy(&policy)?;
+                    self.create_at(&name, self.inner.root.clone(), policy)?;
+                } else {
+                    self.create(&name)?;
+                }
                 if let Some(config) = req.get("config")
                     && let Err(e) = self.call(&name, json!({"op":"configure","value":config}))
                 {
@@ -196,10 +204,16 @@ impl Runtime {
                         .get("config")
                         .cloned()
                         .or_else(|| self.call(&name, json!({"op":"config"})).ok());
+                    let policy = self
+                        .call(&name, json!({"op":"session_policy"}))
+                        .ok()
+                        .map(serde_json::from_value)
+                        .transpose()?
+                        .unwrap_or_else(|| self.shared.policy.clone());
                     if self.inner.instances.lock().unwrap().contains_key(&name) {
                         self.destroy(&name)?;
                     }
-                    self.create(&name)?;
+                    self.create_at(&name, self.inner.root.clone(), policy)?;
                     if let Some(config) = config {
                         self.call(&name, json!({"op":"configure","value":config}))?;
                     }
@@ -208,7 +222,9 @@ impl Runtime {
             }
             "eval" | "stats" | "tasks" | "pause" | "resume" | "stop" | "snapshot" | "cancel"
             | "actions" | "invoke" | "configure" | "config" | "config_description" | "ui_event"
-            | "ui_dismiss" | "start" | "lifecycle" | "device_snapshot" => self.call(&name, req),
+            | "ui_dismiss" | "start" | "lifecycle" | "device_snapshot" | "session_policy" => {
+                self.call(&name, req)
+            }
             _ => Err(Fault::new(
                 "invalid_argument",
                 "command",
@@ -218,12 +234,17 @@ impl Runtime {
         }
     }
     fn create(&self, name: &str) -> Result<()> {
-        self.create_at(name, self.inner.root.clone())
+        self.create_at(name, self.inner.root.clone(), self.shared.policy.clone())
     }
-    pub(crate) fn create_plugin_session(&self, name: &str, path: &Path) -> Result<()> {
-        self.create_at(name, path.canonicalize()?)
+    pub(crate) fn create_plugin_session(
+        &self,
+        name: &str,
+        path: &Path,
+        policy: bindings::Policy,
+    ) -> Result<()> {
+        self.create_at(name, path.canonicalize()?, policy)
     }
-    fn create_at(&self, name: &str, session_root: PathBuf) -> Result<()> {
+    fn create_at(&self, name: &str, session_root: PathBuf, policy: bindings::Policy) -> Result<()> {
         if name.is_empty()
             || name.len() > 64
             || !name
@@ -254,7 +275,7 @@ impl Runtime {
             local.block_on(&rt,async move{
                 let setup=(||->Result<(Lua,Context)>{
                     let lua=Lua::new_with(StdLib::TABLE|StdLib::STRING|StdLib::MATH|StdLib::UTF8,LuaOptions::default().catch_rust_panics(false))?;
-                    lua.set_memory_limit(LUA_MEMORY)?;let ctx=Context::new(name_owned,shared,root);bindings::install(&lua,&ctx)?;Ok((lua,ctx))
+                    lua.set_memory_limit(LUA_MEMORY)?;let mut ctx=Context::new(name_owned,shared,root);ctx.policy=Arc::new(policy);bindings::install(&lua,&ctx)?;Ok((lua,ctx))
                 })();
                 let(lua,ctx)=match setup{Ok(x)=>{let _=ready_tx.send(Ok(()));x},Err(e)=>{let _=ready_tx.send(Err(e.to_string()));return;}};
                 let operations=std::rc::Rc::new(std::cell::RefCell::new(BTreeMap::<String,CancellationToken>::new()));
@@ -488,6 +509,7 @@ async fn handle_job(
                 json!({"values":values,"output":output.borrow().clone(),"lua_bytes":lua.used_memory()}),
             )
         }
+        "session_policy" => Ok(serde_json::to_value(ctx.policy.as_ref())?),
         "stats" => Ok(
             json!({"lua_bytes":lua.used_memory(),"lua_limit":LUA_MEMORY,"native_buffer_bytes":ctx.native_bytes(),"tasks":ctx.tasks.borrow().len(),"paused":ctx.paused.get(),"connections":ctx.connection_count()}),
         ),

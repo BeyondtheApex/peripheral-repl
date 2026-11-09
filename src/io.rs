@@ -45,6 +45,7 @@ pub struct ChannelCore {
     path: String,
     owner: String,
     shared: Arc<Shared>,
+    policy: Arc<bindings::Policy>,
     generation: String,
     numbered: bool,
 }
@@ -489,7 +490,7 @@ fn worker(core: Arc<ChannelCore>, mut backend: Backend, rx: mpsc::Receiver<Comma
                     let result = match &mut backend {
                         Backend::Hid { handle, .. } => {
                             if op != "get_input_report"
-                                && !core.shared.policy.allows_report(&core.info, &op, &wire)
+                                && !core.policy.allows_report(&core.info, &op, &wire)
                             {
                                 Err(Fault::new(
                                     "permission_denied",
@@ -670,7 +671,7 @@ fn worker(core: Arc<ChannelCore>, mut backend: Backend, rx: mpsc::Receiver<Comma
                             }
                         },
                         Backend::Hid { handle: h, .. } => {
-                            if !core.shared.policy.allows(&core.info, &wire) {
+                            if !core.policy.allows(&core.info, &wire) {
                                 Err(Fault::new(
                                     "permission_denied",
                                     "hid.write",
@@ -787,6 +788,7 @@ fn open_channel(
         path: path.clone(),
         owner: ctx.name.clone(),
         shared: ctx.shared.clone(),
+        policy: ctx.policy.clone(),
         generation: uuid::Uuid::new_v4().to_string(),
         numbered,
     });
@@ -897,6 +899,7 @@ pub fn install(lua: &Lua, ctx: &Context) -> mlua::Result<()> {
             path: String::new(),
             owner: ctx.name.clone(),
             shared: ctx.shared.clone(),
+            policy: ctx.policy.clone(),
             generation: String::new(),
             numbered: true,
         }),

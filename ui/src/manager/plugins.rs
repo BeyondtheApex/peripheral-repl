@@ -1,6 +1,29 @@
 use super::*;
 impl Manager {
     pub(super) fn plugins(&self, sender: &async_channel::Sender<Request>) -> AnyElement {
+        if self.backend_status != crate::backend_status::BackendStatus::Running {
+            return div()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(div().text_2xl().child(crate::i18n::tr("我的插件")))
+                .child(label("启动后台后，可以安装插件、修改配置和查看设备状态。"))
+                .child(if self.backend_status.busy() {
+                    label("后台操作进行中").into_any_element()
+                } else {
+                    button(
+                        "plugins-start-backend",
+                        "启动后台",
+                        "play",
+                        json!({"op":"backend_control","action":"start"}),
+                        sender,
+                    )
+                })
+                .into_any_element();
+        }
+        if let Some(editor) = &self.permission_editor {
+            return editor.render(sender);
+        }
         if let Some(editor) = &self.plugin_config {
             return editor.render(sender);
         }
@@ -59,7 +82,9 @@ impl Manager {
             let running = plugin["running"] == true;
             let failed = plugin["state"] == "error";
             let expanded = self.expanded_plugins.contains(id);
-            let (color, status) = if failed {
+            let (color, status) = if plugin["state"] == "awaiting_permission" {
+                (0xe7b85d, "等待授权")
+            } else if failed {
                 (0xf19b7c, "需要处理")
             } else if running {
                 (0x3ed99a, "运行中")
@@ -143,6 +168,13 @@ impl Manager {
                                 .flex()
                                 .items_center()
                                 .gap_2()
+                                .child(button(
+                                    format!("permissions-{id}"),
+                                    "权限",
+                                    "shield-check",
+                                    json!({"op":"permissions_open","plugin":id}),
+                                    sender,
+                                ))
                                 .child(button(
                                     format!("config-{id}"),
                                     "配置",

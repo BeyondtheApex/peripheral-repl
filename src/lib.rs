@@ -12,6 +12,7 @@ pub mod management;
 pub mod native_hid;
 pub mod plugins;
 pub mod protocol;
+mod protocol_tools;
 pub mod queue;
 #[cfg(test)]
 mod regression_tests;

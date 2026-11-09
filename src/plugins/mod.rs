@@ -1,5 +1,6 @@
 //! Built-in plugin lifecycle. A package owns one automatically managed session.
 pub mod package;
+pub mod permissions;
 pub mod resources;
 mod snapshot;
 use crate::runtime::Runtime;
@@ -86,14 +87,14 @@ impl Manager {
                 &json!({"op":"plugin_enable","plugin":id,"enabled":true}),
             );
             return Ok(
-                json!({"installed":id,"startup_error":result.err().map(|e|format!("{e:#}"))}),
+                json!({"installed":id,"permissions":result.as_ref().ok().and_then(|v|v.get("permissions")),"authorization_required":result.as_ref().ok().is_some_and(|v|v["authorization_required"]==true),"startup_error":result.err().map(|e|format!("{e:#}"))}),
             );
         }
         let catalog = package::catalog(root)?;
         if op == "plugins" {
             let mut items = catalog
                 .iter()
-                .map(|(manifest, _)| snapshot::plugin(runtime, manifest, &state))
+                .map(|(manifest, _)| snapshot::plugin(runtime, manifest, &state, root))
                 .collect::<Vec<_>>();
             items.extend(package::broken(root)?);
             return Ok(json!(items));
@@ -120,6 +121,62 @@ impl Manager {
             .iter()
             .find(|(m, _)| m.id == id)
             .context("plugin not installed")?;
+        if op == "plugin_permissions" {
+            return permissions::describe(root, manifest);
+        }
+        if op == "plugin_permissions_save" {
+            let revision = request["revision"]
+                .as_str()
+                .context("permission revision")?;
+            let approved: Vec<String> = serde_json::from_value(request["approved"].clone())?;
+            // Stop existing device owners before replacing their immutable grant set.
+            // An invalid request is rejected before stopping a working plugin.
+            let current = permissions::describe(root, manifest)?;
+            anyhow::ensure!(
+                current["revision"] == revision,
+                "permissions changed; reopen permission editor"
+            );
+            anyhow::ensure!(
+                approved.len() <= manifest.permissions.len()
+                    && approved
+                        .iter()
+                        .all(|id| manifest.permissions.iter().any(|r| &r.id == id))
+                    && approved
+                        .iter()
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len()
+                        == approved.len(),
+                "invalid permission selection"
+            );
+            let instance = session(id);
+            let exists = runtime
+                .dispatch(json!({"op":"instances"}))?
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v == &instance));
+            if exists {
+                runtime.dispatch(json!({"op":"destroy","instance":instance}))?;
+            }
+            permissions::save(root, manifest, revision, &approved)?;
+            state.errors.remove(id);
+            let enabled = state.settings.get(id).is_some_and(|s| s.enabled);
+            let result = permissions::describe(root, manifest)?;
+            drop(state);
+            runtime
+                .shared
+                .emit(&instance, "plugin.permissions", json!({"plugin":id}));
+            let startup_error = if enabled && result["ready"] == true {
+                self.dispatch(
+                    runtime,
+                    root,
+                    &json!({"op":"plugin_enable","plugin":id,"enabled":true}),
+                )
+                .err()
+                .map(|e| format!("{e:#}"))
+            } else {
+                None
+            };
+            return Ok(json!({"plugin":id,"permissions":result,"startup_error":startup_error}));
+        }
         let instance = session(id);
         let previous = state.settings.get(id).cloned().unwrap_or_default();
         let mut setting = previous.clone();
@@ -159,6 +216,23 @@ impl Manager {
             state.settings.insert(id.into(), previous);
             return Err(e);
         }
+        let permission_state = permissions::describe(root, manifest)?;
+        if setting.enabled && permission_state["ready"] != true {
+            if runtime
+                .dispatch(json!({"op":"instances"}))?
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v == &instance))
+            {
+                runtime.dispatch(json!({"op":"destroy","instance":instance}))?;
+            }
+            state.errors.remove(id);
+            runtime
+                .shared
+                .emit(&instance, "plugin.permissions", json!({"plugin":id}));
+            return Ok(
+                json!({"plugin":id,"enabled":true,"authorization_required":true,"permissions":permission_state}),
+            );
+        }
         let result = (|| -> Result<()> {
             let exists = runtime
                 .dispatch(json!({"op":"instances"}))?
@@ -182,7 +256,7 @@ impl Manager {
             if !setting.enabled {
                 return Ok(());
             }
-            runtime.create_plugin_session(&instance, path)?;
+            runtime.create_plugin_session(&instance, path, permissions::policy(root, manifest)?)?;
             let start = (|| -> Result<()> {
                 runtime.dispatch(json!({"op":"configure","instance":instance,"value":config}))?;
                 let code = crate::runtime::read_source(path, &manifest.entry)?;
@@ -232,3 +306,6 @@ impl Manager {
 pub fn session(id: &str) -> String {
     format!("plugin_{id}")
 }
+
+#[cfg(test)]
+mod permission_tests;

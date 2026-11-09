@@ -14,14 +14,23 @@ impl Manager {
             .bg(crate::appearance::color(0x151a22))
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .mb_7()
-                    .text_lg()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(icon("cpu"))
-                    .child("Peripheral"),
+                    .id("sidebar-message-slot")
+                    .h(px(140.))
+                    .w_full()
+                    .flex_shrink_0()
+                    .child(match &self.notice {
+                        Some(notice) => notice.render(sender),
+                        None => div()
+                            .size_full()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(icon("cpu"))
+                            .child("Peripheral")
+                            .into_any_element(),
+                    }),
             )
             .children(
                 [
@@ -48,7 +57,8 @@ impl Manager {
                         } else {
                             0x151a22
                         }))
-                        .hover(|s| s.bg(crate::appearance::color(0x263042)))
+                        .hover(|s| s.bg(crate::appearance::interactive_hover()))
+                        .active(|s| s.bg(crate::appearance::token("border")))
                         .on_click(move |_, _, _| send(&sender, body.clone()))
                         .child(icon(ico))
                         .child(crate::i18n::tr(title))

@@ -9,6 +9,8 @@ use std::{
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
+    #[serde(default)]
+    pub permissions: Vec<super::permissions::Request>,
     pub id: String,
     pub name: String,
     pub version: String,
@@ -29,6 +31,7 @@ fn default_locale() -> String {
 }
 impl Manifest {
     pub fn validate(&self) -> Result<()> {
+        super::permissions::validate(&self.permissions)?;
         crate::environment::validate_catalog(&self.locales, &self.default_locale)?;
         super::resources::validate(&self.resources)?;
         ensure!(

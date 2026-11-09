@@ -11,15 +11,13 @@ pub struct Editor {
     pub fields: Vec<Field>,
     pub values: Value,
     pub schema: Value,
+    pub errors: std::collections::BTreeMap<String, String>,
+    pub saving: bool,
 }
 impl Editor {
     pub fn new(plugin: &Value, window: &mut Window, cx: &mut App) -> Self {
         let mut fields = Vec::new();
-        for (key, schema) in plugin["config_schema"]["properties"]
-            .as_object()
-            .into_iter()
-            .flatten()
-        {
+        for (key, schema) in super::configuration_fields::ordered(&plugin["config_schema"]) {
             let value = plugin["config"][key].clone();
             let text = value
                 .as_str()
@@ -42,21 +40,33 @@ impl Editor {
             fields,
             values: plugin["config"].clone(),
             schema: plugin["config_schema"].clone(),
+            errors: Default::default(),
+            saving: false,
         }
     }
-    pub fn value(&self, cx: &App) -> anyhow::Result<Value> {
+    pub fn value(&mut self, cx: &App) -> anyhow::Result<Value> {
+        self.errors.clear();
         let mut value = self.values.clone();
         for field in &self.fields {
-            if field.schema["enum"].is_array() || field.schema["type"] == "boolean" {
-                continue;
-            }
-            let text = field.input.read(cx).value();
-            value[&field.key] = if field.schema["type"] == "string" {
-                json!(text)
+            let parsed = if field.schema["enum"].is_array() || field.schema["type"] == "boolean" {
+                super::configuration_fields::validate(&field.schema, &value[&field.key])
+                    .map(|_| value[&field.key].clone())
             } else {
-                serde_json::from_str(&text)?
+                super::configuration_fields::parse(&field.schema, &field.input.read(cx).value())
             };
+            match parsed {
+                Ok(v) => value[&field.key] = v,
+                Err(e) => {
+                    self.errors.insert(field.key.clone(), e);
+                }
+            }
         }
+        anyhow::ensure!(
+            self.errors.is_empty(),
+            "{}",
+            crate::i18n::tr("配置未保存，请修改标红的字段。")
+        );
+        peripheral_repl::extras::validate(&self.schema, &value)?;
         Ok(value)
     }
     pub fn render(&self, sender: &async_channel::Sender<Request>) -> AnyElement {
@@ -75,8 +85,14 @@ impl Editor {
                 }else if f.schema["type"]=="boolean"{
                     field=field.child(toggle(format!("field-{}",f.key),self.values[&f.key]==true,json!({"op":"plugin_config_option","key":f.key,"value":self.values[&f.key]!=true}),sender));
                 }else{field=field.child(Input::new(&f.input));}
+                if f.schema.get("minimum").is_some() || f.schema.get("maximum").is_some() {
+                    field=field.child(label(format!("{}: {}",crate::i18n::tr("允许范围"),super::configuration_fields::range(&f.schema))));
+                }
+                if let Some(error)=self.errors.get(&f.key) {
+                    field=field.child(div().text_sm().text_color(crate::appearance::token("error")).child(error.clone()));
+                }
                 field
             }))
-            .child(div().flex().justify_end().child(button("save-plugin-config","保存配置","check",json!({"op":"plugin_config_save"}),sender))).into_any_element()
+            .child(div().flex().justify_end().child(if self.saving {label("正在保存…").into_any_element()} else {button("save-plugin-config","保存配置","check",json!({"op":"plugin_config_save"}),sender)})).into_any_element()
     }
 }

@@ -71,11 +71,15 @@ fn validate_at(s: &Value, v: &Value, path: &str, depth: usize) -> Result<(), Fau
             "maxLength",
             "maxItems",
             "default",
+            "order",
         ]
         .contains(&key.as_str())
         {
             return Err(fail(format!("unsupported schema keyword {key}")));
         }
+    }
+    if s.get("order").is_some_and(|v| v.as_i64().is_none()) {
+        return Err(fail("order must be an integer".into()));
     }
     let kind = s["type"].as_str().unwrap_or("object");
     if let Some(labels) = s.get("enumNames") {

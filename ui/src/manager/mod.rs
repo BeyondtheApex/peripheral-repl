@@ -7,12 +7,14 @@ use gpui_kit::{
 use serde_json::{Value, json};
 mod ai;
 pub(crate) mod configuration;
+mod configuration_fields;
 mod dashboard_settings;
 mod devices;
 mod feedback;
 mod flip;
 pub(crate) mod motion;
 mod navigation;
+pub(crate) mod permissions;
 mod plugin_details;
 mod plugins;
 mod repl;
@@ -30,6 +32,8 @@ pub struct Manager {
     pub selected: String,
     pub page: String,
     pub plugin_config: Option<configuration::Editor>,
+    pub permission_editor: Option<permissions::Editor>,
+    pub permission_prompted: std::collections::BTreeSet<String>,
     pub expanded_plugins: std::collections::BTreeSet<String>,
     pub status: String,
     pub code: Entity<InputState>,
@@ -45,6 +49,8 @@ pub struct Manager {
     pub device_faces: std::collections::BTreeMap<String, (bool, u64)>,
     pub page_revision: u64,
     pub startup: crate::startup::State,
+    pub notice: Option<crate::notifications::Notice>,
+    pub notice_revision: u64,
 }
 impl Manager {
     pub fn new(window: &mut Window, cx: &mut App) -> Self {
@@ -57,6 +63,8 @@ impl Manager {
             selected: "default".into(),
             page: "plugins".into(),
             plugin_config: None,
+            permission_editor: None,
+            permission_prompted: Default::default(),
             expanded_plugins: Default::default(),
             status: "就绪".into(),
             code: cx.new(|cx| {
@@ -76,6 +84,8 @@ impl Manager {
             device_faces: Default::default(),
             page_revision: 0,
             startup: crate::startup::state(),
+            notice: None,
+            notice_revision: 0,
         }
     }
     pub fn transition(&mut self) {
@@ -177,6 +187,9 @@ impl Manager {
                     .child(
                         div()
                             .px_6()
+                            .h(px(32.))
+                            .flex_shrink_0()
+                            .truncate()
                             .py_2()
                             .text_xs()
                             .text_color(crate::appearance::color(MUTED))

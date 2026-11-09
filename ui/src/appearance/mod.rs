@@ -187,6 +187,11 @@ pub fn token(name: &str) -> Hsla {
             .unwrap_or_else(|| rgb(0x808080).into())
     })
 }
+pub fn interactive_hover() -> Hsla {
+    let mut color = token("accent");
+    color.a = 0.22;
+    color
+}
 pub fn background() -> Hsla {
     let mut c = token("background");
     if material_enabled() {

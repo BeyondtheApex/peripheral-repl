@@ -25,7 +25,7 @@ impl Manager {
                     .child(crate::i18n::tr("插件工作目录"))
                     .child(label(self.workspace.clone()))
                     .child(label(format!(
-                        "设备访问策略：{}",
+                        "默认 REPL 策略：{}",
                         self.backend["ping"]["policy"].as_str().unwrap_or("未连接")
                     )))
                     .child(

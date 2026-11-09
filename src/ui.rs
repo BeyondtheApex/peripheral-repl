@@ -1,5 +1,5 @@
 //! Lua presentation API. Owns data, never HWNDs, textures or renderer objects.
-use crate::bindings::{Context, to_json};
+use crate::bindings::{Context, to_ui_json};
 use mlua::{Lua, LuaSerdeExt, Value as LuaValue};
 use peripheral_ui_protocol::{Surface, identifier};
 use serde::{Deserialize, Serialize};
@@ -151,7 +151,7 @@ pub fn install(lua: &Lua, ctx: &Context) -> mlua::Result<()> {
     ui.set(
         "publish",
         lua.create_function(move |_, (id, value): (String, LuaValue)| {
-            let surface: Surface = serde_json::from_value(to_json(value, 0)?).map_err(error)?;
+            let surface: Surface = serde_json::from_value(to_ui_json(value)?).map_err(error)?;
             publish(&c, &id, surface)
         })?,
     )?;
@@ -170,7 +170,7 @@ pub fn install(lua: &Lua, ctx: &Context) -> mlua::Result<()> {
                 .ok_or_else(|| error("surface not published"))?
                 .surface
                 .clone();
-            surface.patch(&to_json(value, 0)?).map_err(error)?;
+            surface.patch(&to_ui_json(value)?).map_err(error)?;
             publish(&c, &id, surface)
         })?,
     )?;

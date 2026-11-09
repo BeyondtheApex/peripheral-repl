@@ -67,11 +67,68 @@ impl Application {
                     if v["ok"] == true && v["result"]["connection"] == "connected" {
                         self.accept_state(v["result"].clone(), cx)?;
                     }
-                    if v["ok"] == true && v["command"]["op"] == "plugin_configure" {
+                    if operation == "plugin_configure" {
                         self.manager(cx, |m, _| {
-                            m.plugin_config = None;
-                            m.transition();
+                            if m.plugin_config
+                                .as_ref()
+                                .is_some_and(|e| v["command"]["plugin"] == e.id)
+                            {
+                                if v["ok"] == true {
+                                    m.plugin_config = None;
+                                    m.transition();
+                                } else if let Some(e) = &mut m.plugin_config {
+                                    e.saving = false;
+                                }
+                            }
                         });
+                    }
+                    if operation == "plugin_permissions_save" {
+                        self.manager(cx, |m, _| {
+                            if m.permission_editor
+                                .as_ref()
+                                .is_some_and(|e| v["command"]["plugin"] == e.id)
+                            {
+                                if v["ok"] == true {
+                                    m.permission_editor = None;
+                                    m.transition();
+                                } else if let Some(e) = &mut m.permission_editor {
+                                    e.saving = false;
+                                }
+                            }
+                        });
+                    }
+                    if ![
+                        "connect",
+                        "refresh",
+                        "ui_snapshot",
+                        "ui_environment",
+                        "ui_event",
+                        "ui_dismiss",
+                    ]
+                    .contains(&operation)
+                    {
+                        if v["ok"] != true {
+                            self.notify("error", v["error"].as_str().unwrap_or("操作失败"), cx);
+                        } else if v["result"]["authorization_required"] == true
+                            || (operation == "plugin_permissions_save"
+                                && v["result"]["permissions"]["ready"] == false)
+                        {
+                            self.notify("info", "已保存；插件等待必需权限。", cx);
+                        } else if let Some(error) = v["result"]["startup_error"].as_str() {
+                            self.notify("error", error, cx);
+                        } else {
+                            let message = match operation {
+                                "plugin_configure" => "配置已保存并生效",
+                                "plugin_permissions_save" => "授权选择已保存",
+                                "install_plugin" => "插件已安装；需要授权时请确认设备权限。",
+                                "start_backend" => "后台已启动",
+                                "stop_backend" => "后台已停止",
+                                "restart_backend" => "后台已重启",
+                                "plugin_enable" | "plugin_restart" => "插件运行状态已更新",
+                                _ => "操作已完成",
+                            };
+                            self.notify("success", message, cx);
+                        }
                     }
                     self.manager(cx, |m, _| {
                         m.log(format!(
@@ -206,6 +263,13 @@ impl Application {
                     self.manager(cx, |m, _| m.confirm = None);
                 }
                 "pick_workspace" | "install_plugin_picker" | "pick_update" => {
+                    if op == "install_plugin_picker" {
+                        anyhow::ensure!(
+                            self.backend_status == BackendStatus::Running,
+                            "{}",
+                            crate::i18n::tr("请先启动后台")
+                        );
+                    }
                     let paths = cx.prompt_for_paths(PathPromptOptions {
                         files: false,
                         directories: true,
@@ -230,9 +294,16 @@ impl Application {
                     Some("pick_workspace") => self
                         .backend
                         .command(json!({"op":"workspace","path":v["path"]}))?,
-                    Some("install_plugin_picker") => self
-                        .backend
-                        .command(json!({"op":"install_plugin","path":v["path"]}))?,
+                    Some("install_plugin_picker") => {
+                        anyhow::ensure!(
+                            self.backend_status == BackendStatus::Running,
+                            "{}",
+                            crate::i18n::tr("请先启动后台")
+                        );
+                        self.backend
+                            .command(json!({"op":"install_plugin","path":v["path"]}))?;
+                        self.notify("info", "正在安装插件…", cx);
+                    }
                     Some("pick_update") => {
                         let path =
                             std::path::PathBuf::from(v["path"].as_str().context("package folder")?);
@@ -305,6 +376,31 @@ impl Application {
                 m.workspace = root.into();
             }
             m.backend = state;
+            if m.permission_editor.is_none() && m.plugin_config.is_none() {
+                let pending = m.backend["plugins"]
+                    .as_array()
+                    .and_then(|items| {
+                        items.iter().find(|p| {
+                            let key = format!("{}:{}", p["id"], p["permissions"]["revision"]);
+                            p["enabled"] == true
+                                && p["permissions"]["reviewed"] == false
+                                && p["permissions"]["items"]
+                                    .as_array()
+                                    .is_some_and(|a| !a.is_empty())
+                                && !m.permission_prompted.contains(&key)
+                        })
+                    })
+                    .cloned();
+                if let Some(plugin) = pending {
+                    m.permission_prompted.insert(format!(
+                        "{}:{}",
+                        plugin["id"], plugin["permissions"]["revision"]
+                    ));
+                    m.permission_editor = Some(crate::manager::permissions::Editor::new(&plugin));
+                    m.page = "plugins".into();
+                    m.transition();
+                }
+            }
         });
         let main = &self.surfaces["main"];
         let view = main.view.clone();

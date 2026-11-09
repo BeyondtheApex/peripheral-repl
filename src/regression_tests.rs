@@ -110,3 +110,33 @@ fn failing_environment_callback_does_not_block_other_plugins() {
         "en"
     );
 }
+
+#[test]
+fn nested_ui_accepts_ring_inside_card_but_rejects_cycles() {
+    let root = tempfile::tempdir().unwrap();
+    let rt = Runtime::new(root.path()).unwrap();
+    rt.dispatch(json!({"op":"create"})).unwrap();
+    rt.dispatch(json!({"op":"eval","code":r#"
+        ui.publish('card',{target='tray_card',root={id='card',type='column',children={
+            {id='graphic',type='column',children={
+                {id='ring',type='ring',value=80,children={
+                    {id='icon',type='icon',icon='mouse',style={size=24}}
+                }}
+            }}
+        }}})
+    "#}))
+        .unwrap();
+    assert_eq!(
+        rt.dispatch(json!({"op":"ui_snapshot"})).unwrap()["surfaces"][0]["surface"]["root"]["children"]
+            [0]["children"][0]["children"][0]["icon"],
+        "mouse"
+    );
+    assert!(rt.dispatch(json!({"op":"eval","code":"local node={id='cycle',type='column'};node.children={node};ui.publish('cycle',{target='tray_card',root=node})"})).is_err());
+    assert_eq!(
+        rt.dispatch(json!({"op":"ui_snapshot"})).unwrap()["surfaces"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}

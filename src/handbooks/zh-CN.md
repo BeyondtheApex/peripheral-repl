@@ -135,7 +135,9 @@ schema 支持 type/properties/required/additionalProperties/items/minimum/maximu
 
 packet 包含 wire/payload 等字段，检查长度、报告 ID、命令、序号及已知校验。`get_input_report`/Feature 使用容量长度，检查实际返回，避免截断/陈旧队列混淆。普通 Output/Feature 默认拒绝；Feature 并未缺失。
 
-宿主 `.peripheral/policy.json` 保存精确授权：普通 Output 为 output_rules，Feature/控制 Output 为 hid_rules（operation 为 get_feature/set_feature/send_output_report），每条指定 VID/PID/usage/interface 和完整 packets，不允许任意字节通配。GUI 后台启动读取策略，缺失则只读，修改后重启后台；不要让插件改写它。当前真实耳机/鼠标策略只允许已审核电池查询。
+插件在 `plugin.json.permissions` 中声明所需的精确设备操作，安装或首次启用时由宿主显示授权页。用户从插件卡片的“权限”进入，可逐项允许、撤销并查看设备和报文参数。授权分别保存在工作目录 `.peripheral/permissions/<plugin-id>.json`，无需手写此文件；插件 Lua 无权改写授权。必需权限未允许时插件不执行设备代码，状态为 `awaiting_permission`。新增或变更权限需要再次确认。旧版未声明权限的插件需要更新清单，不能借用全局策略。
+
+`.peripheral/policy.json` 保留为默认 REPL/AI 调试会话的策略，缺失则只读。显式创建会话时提供的 `policy` 完整覆盖默认策略（即使是空对象），不会合并；插件始终使用自己的授权。修改全局文件后重启后台。HID 普通 Output 使用 `output_rules`；Feature/控制 Output 使用 `hid_rules`，operation 为 `get_feature`、`set_feature` 或 `send_output_report`。规则匹配精确 VID/PID/usage/interface 和完整 packets，不允许任意字节通配。
 
 拔出时关闭旧通道、清除当前测量、保留卡片。重连检查 path 与 container 冲突，必要时按可信 serial 解析；全零 serial 不可靠，换口无法确认时要求重新绑定。快速拔插可能路径不变但旧 Channel 已 closed。不要在打开新设备时重放上次失败的写操作。一个监控任务串行化枚举/查询/关闭，用 epoch 防旧任务更新新连接。默认电量几十秒采一次，失败退避并自动恢复；不要高频查询唤醒休眠设备。
 
@@ -229,7 +231,7 @@ lifecycle.on('configure',function(value) cfg=value;start() end)
 | window | 常规独立窗口 |
 | taskbar_preview / texture / xaml | 进阶宿主目标，按平台能力验证，不保证所有系统可用 |
 
-节点 type：row/column/text/icon/progress/ring/spacer/button/image。style 支持 width/height/size/padding/gap/radius/stroke/font_size/color/background/track，颜色为 #RRGGBB 或 #RRGGBBAA。progress/ring 的 value 是 0–100。icon 用 Lucide 名称。树节点 ID 唯一；每树最多 128 节点、8 层、32 KiB，每会话 32 视图、全局 64。任务栏单项最多 320×64、总宽 640；tray 最多 64×64。宽高为逻辑像素，x/y 为屏幕物理坐标。紧凑 tray_list 宜一行图标+文字+小进度条，不要硬编码大卡片高度。
+节点 type：row/column/text/icon/progress/ring/spacer/button/image。style 支持 width/height/size/padding/gap/radius/stroke/font_size/text_align/color/background/track，颜色为 #RRGGBB 或 #RRGGBBAA。progress/ring 的 value 是 0–100。icon 用 Lucide 名称。树节点 ID 唯一；每树最多 128 节点、8 层、32 KiB，每会话 32 视图、全局 64。任务栏单项最多 320×64、总宽 640；tray 最多 64×64。宽高为逻辑像素，x/y 为屏幕物理坐标。紧凑 tray_list 宜一行图标+文字+小进度条，不要硬编码大卡片高度。
 
 静态图片在清单 `resources={"device":"assets/device.png"}` 声明，Lua `resource.list()` 查看。节点例：`{id='art',type='image',style={width=48,height=48},image={resource='device',fit='contain',clip='superellipse',radius=12}}`。fit 为 contain/cover/fill；clip 为 none/rounded/circle/superellipse/bevel。PNG/JPEG/WebP，每张≤4 MiB、4096×4096 且≤800万像素；最多32张、合计16 MiB。不支持任意路径、动画、插件 SVG 图片、视频或自由 Bezier。图片和普通节点在各目标共享渲染路径；托盘仍需小位图回读。Lua 描述 UI，不绑定 GPUI 对象；事件和小型描述经 IPC，稳定状态不持续渲染。
 
@@ -315,3 +317,36 @@ render()
 设备 `name/label/detail` 和 values 的显示标签/字符串可直接写资源键，后台在 snapshot 的 `display` 对象中按插件字典解析；`state` 保留原始数据，`display.values` 是 `{key,label,value}` 列表。语言变化会发送新的显示事件，但不更改 updated_unix_ms、last_seen_unix_ms、TTL 和测量值。自定义视图文本显式调用 `i18n.t()`；动态数据保持在参数中。
 
 REPL/MCP 可以 `{"op":"ui_environment"}` 读取环境，或传 `value:{"locale":"en","theme":"dark","accent":"#2984e3"}` 更改后台呈现环境；这是后台 API，不修改 GUI 用户偏好。GUI 连接或外观变化会将自己的设置同步到后台。无需重启插件的设备监控。框架的导航、折叠和开关使用有限动画；稳态不持续重绘，Lua ring 的持续动画依旧在 GUI 本地执行。
+
+
+## 插件授权与稳定的配置表单
+
+`permissions` 是安装前可读取的静态声明，放在 plugin.json；动态配置及界面仍由 Lua 提供。下面是真实 AM .97 接收器的已验证电量查询声明示例。只能用于匹配的设备，不能改换设备 ID 来探测其他设备。
+
+```json
+{"permissions":[{"id":"battery-query","title":"鼠标与充电座电量","description":"只发送这两个已验证的电量查询报文。","required":true,"policy":{"output_rules":[{"vendor_id":3725,"product_id":1795,"usage_page":65299,"usage":1,"interface":1,"packets":["060680055a0200cf300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","060600055a02000f300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"]}]}}]}
+```
+
+每个权限组有独立 id、标题、用途说明和 policy。`required` 默认 true；可选权限设 false，拒绝后插件可运行，但对应操作会返回 permission_denied。支持 output_rules、hid_rules、ble_write_rules、ble_pair_rules；参数格式沿用本手册的 HID/GATT 精确规则。授权是宿主数据，插件包不得附带用户授权文件。
+
+后端 `plugin_permissions` 返回 `revision/ready/reviewed/items`，每项含完整 `request` 和 `approved`。用户明确同意后，用 `plugin_permissions_save` 提交 `plugin`、返回的字符串 `revision`、允许的 ID 数组 `approved`。空数组表示全部撤销；过期 revision 或未知 ID 会被拒绝。必需权限仍不足则暂停插件；保存合法授权后自动恢复已启用插件。修改会先关闭旧会话，防止旧设备句柄继续持有被撤销的权限。无需重启整个后台。
+
+AI 应先解释申请的设备、操作和具体报文，再让用户决定授权。不要因为 permission_denied 自动批准、放宽参数或切换全局策略。`session_policy` 可查看会话生效策略。`create` 的 `policy` 参数用于独立调试会话：`{"op":"create","instance":"readonly","policy":{}}`；reset/reload 保持该会话的策略。没有 policy 参数时使用全局默认值。
+
+如需默认 REPL 策略，`.peripheral/policy.json` 最小示例是 `{"name":"read-only","output_rules":[],"hid_rules":[],"ble_write_rules":[],"ble_pair_rules":[]}`。有已验证查询时可把上例的 policy 对象作为全局文件，并增加 name。这个全局文件不会给插件追加权限。
+
+Lua 配置声明支持字段级整数 `order`，数值小的在前；相同 order 按字段键名排序，未声明的最后按键名稳定排序。不要依赖 Lua table 遍历顺序。
+
+```lua
+config.define({type='object',additionalProperties=false,properties={
+ interval_ms={type='integer',order=10,description='采样间隔（毫秒）',minimum=15000,maximum=300000},
+ cards={type='boolean',order=20,description='速览卡片'},
+ combine_devices={type='boolean',order=30,description='合并鼠标与充电座速览'}
+}}, {interval_ms=30000,cards=true,combine_devices=true})
+```
+
+设置页显示数值范围，提交前逐字段校验；失败保留输入并标出原因，顶部通知保持可见。成功显示保存反馈，保存期间避免重复提交。`3000` 不满足示例的 `minimum=15000`，不能通过反复点击保存绕过。
+
+节点 style.width/style.height 是固定的逻辑尺寸，整个文档仍按承载目标保持比例缩放；带固定宽度的文本超长时省略。速览行可给图标、名称、进度条和数值分别固定宽度，避免文本长度改变列的位置。AM .97 插件的合并选项控制速览项目及卡片，任务栏仍只有一个双电池项目。关闭合并选项恢复两个项目，底座使用 battery-charging 图标。
+
+`style.text_align` 指定文字在声明宽度内的对齐方式：`left`（默认）、`center`、`right`。卡片文字居中时同时声明 `width` 和 `text_align="center"`。

@@ -96,6 +96,7 @@ impl Application {
                                 .clone();
                             manager.page = "plugins".into();
                             manager.transition();
+                            manager.permission_editor = None;
                             manager.plugin_config = Some(Editor::new(&plugin, window, cx));
                             cx.notify();
                             Ok::<(), anyhow::Error>(())
@@ -106,22 +107,69 @@ impl Application {
                     m.plugin_config = None;
                     m.transition();
                 }),
-                "plugin_config_option" => self.manager(cx, |m, _| {
-                    if let Some(editor) = &mut m.plugin_config
-                        && let Some(key) = v["key"].as_str()
-                    {
-                        editor.values[key] = v["value"].clone();
-                    }
-                }),
+                "plugin_config_option" => {
+                    let key = v["key"].as_str().context("field key")?;
+                    let new_value = v["value"].clone();
+                    let surface = &self.surfaces["main"];
+                    let view = surface.view.clone();
+                    surface.window.update(cx, |_, window, cx| {
+                        view.update(cx, |v, cx| -> Result<()> {
+                            let editor = v
+                                .manager
+                                .as_mut()
+                                .context("manager")?
+                                .plugin_config
+                                .as_mut()
+                                .context("configuration not open")?;
+                            anyhow::ensure!(!editor.saving, "configuration save in progress");
+                            let field = editor
+                                .fields
+                                .iter()
+                                .find(|f| f.key == key)
+                                .context("unknown configuration field")?;
+                            if field.schema["enum"].is_array() || field.schema["type"] == "boolean"
+                            {
+                                peripheral_repl::extras::validate(&field.schema, &new_value)?;
+                                editor.values[key] = new_value.clone();
+                            } else {
+                                let text = new_value
+                                    .as_str()
+                                    .map(str::to_owned)
+                                    .unwrap_or_else(|| new_value.to_string());
+                                field
+                                    .input
+                                    .update(cx, |input, cx| input.set_value(text, window, cx));
+                            }
+                            editor.errors.remove(key);
+                            cx.notify();
+                            Ok(())
+                        })
+                    })??;
+                }
                 "plugin_config_save" => {
-                    let m = self.surfaces["main"]
-                        .view
-                        .read(cx)
-                        .manager
-                        .as_ref()
-                        .context("manager")?;
-                    let editor = m.plugin_config.as_ref().context("configuration not open")?;
-                    self.backend.command(json!({"op":"plugin_configure","plugin":editor.id,"value":editor.value(cx)?,"schema":editor.schema}))?;
+                    anyhow::ensure!(
+                        self.backend_status == crate::backend_status::BackendStatus::Running,
+                        "{}",
+                        crate::i18n::tr("请先启动后台")
+                    );
+                    let view = self.surfaces["main"].view.clone();
+                    let command=view.update(cx,|v,cx| -> Result<Option<Value>> {
+                        let editor=v.manager.as_mut().context("manager")?.plugin_config.as_mut().context("configuration not open")?;
+                        if editor.saving { return Ok(None); }
+                        let result=editor.value(cx);
+                        cx.notify();
+                        let value=result?;
+                        Ok(Some(json!({"op":"plugin_configure","plugin":editor.id,"value":value,"schema":editor.schema})))
+                    })?;
+                    if let Some(command) = command {
+                        self.backend.command(command)?;
+                        self.manager(cx, |m, _| {
+                            if let Some(e) = &mut m.plugin_config {
+                                e.saving = true;
+                            }
+                        });
+                        self.notify("info", "正在保存…", cx);
+                    }
                 }
                 _ => {}
             }

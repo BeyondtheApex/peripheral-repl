@@ -269,7 +269,7 @@ pub fn validate_rules(rules: &[WriteRule]) -> anyhow::Result<()> {
     Ok(())
 }
 fn allowed(
-    shared: &Shared,
+    policy: &bindings::Policy,
     path: &str,
     service: &str,
     characteristic: &str,
@@ -277,7 +277,7 @@ fn allowed(
     mode: &str,
     bytes: &[u8],
 ) -> bool {
-    shared.policy.ble_write_rules.iter().any(|r| {
+    policy.ble_write_rules.iter().any(|r| {
         r.path == path
             && uuid(&r.service).ok() == uuid(service).ok()
             && uuid(&r.characteristic).ok() == uuid(characteristic).ok()
@@ -326,6 +326,7 @@ struct Core {
     generation: String,
     owner: String,
     shared: Arc<Shared>,
+    policy: Arc<bindings::Policy>,
     started: Instant,
 }
 impl Core {
@@ -1098,7 +1099,7 @@ fn select_descriptor(a: &Attribute, key: &str) -> Result<Value, Fault> {
 }
 fn allowed_attribute(c: &Core, a: &Attribute, d: Option<&Value>, mode: &str, bytes: &[u8]) -> bool {
     if !allowed(
-        &c.shared,
+        &c.policy,
         &c.path,
         &a.service,
         &a.uuid,
@@ -1123,7 +1124,7 @@ fn allowed_attribute(c: &Core, a: &Attribute, d: Option<&Value>, mode: &str, byt
             .count()
             > 1
     });
-    c.shared.policy.ble_write_rules.iter().any(|r| {
+    c.policy.ble_write_rules.iter().any(|r| {
         r.path == c.path
             && uuid(&r.service).ok() == uuid(&a.service).ok()
             && uuid(&r.characteristic).ok() == uuid(&a.uuid).ok()
@@ -1244,6 +1245,7 @@ fn new_core(
         generation: uuid::Uuid::new_v4().to_string(),
         owner: ctx.name.clone(),
         shared: ctx.shared.clone(),
+        policy: ctx.policy.clone(),
         started: Instant::now(),
     })
 }
@@ -1397,7 +1399,7 @@ pub fn install(lua: &Lua, ctx: &Context) -> mlua::Result<()> {
                         None
                     };
                     if name != "pairing"
-                        && !context.shared.policy.ble_pair_rules.iter().any(|r| {
+                        && !context.policy.ble_pair_rules.iter().any(|r| {
                             r.path == path && r.operation == name && r.protection == protection
                         })
                     {

@@ -5,8 +5,16 @@ pub(super) fn registration_only(device: Value) -> Value {
     json!({"descriptor":device["descriptor"],"image":device["image"],
         "resource":device["resource"],"state":{},"stale":true})
 }
-pub(super) fn plugin(runtime: &Runtime, manifest: &package::Manifest, state: &State) -> Value {
+pub(super) fn plugin(
+    runtime: &Runtime,
+    manifest: &package::Manifest,
+    state: &State,
+    root: &Path,
+) -> Value {
     let instance = session(&manifest.id);
+    let permissions = super::permissions::describe(root, manifest).unwrap_or_else(
+        |e| json!({"ready":false,"reviewed":false,"error":e.to_string(),"items":[]}),
+    );
     let setting = state
         .settings
         .get(&manifest.id)
@@ -38,7 +46,7 @@ pub(super) fn plugin(runtime: &Runtime, manifest: &package::Manifest, state: &St
             json!({"value":setting.config.clone().unwrap_or(json!({})),"schema":setting.schema}),
         );
     json!({"id":manifest.id,"name":manifest.name,"version":manifest.version,"description":manifest.description,
-        "enabled":setting.enabled,"running":running,"state":if state.errors.contains_key(&manifest.id){"error"}else if running{"running"}else{"stopped"},
+        "permissions":permissions,"enabled":setting.enabled,"running":running,"state":if setting.enabled && permissions["ready"] != true {"awaiting_permission"}else if state.errors.contains_key(&manifest.id){"error"}else if running{"running"}else{"stopped"},
         "error":state.errors.get(&manifest.id),"instance":instance,"config":description["value"],"config_schema":description["schema"],
         "config_live":stats.is_some(),"devices":devices,"device":device,"views":views,"stats":stats})
 }

@@ -101,11 +101,13 @@ impl Dashboard {
                         .items_center()
                         .text_size(px(12. * scale))
                         .text_color(crate::appearance::color(0x9cabc0))
-                        .child(
-                            div()
-                                .truncate()
-                                .child(format!("{owner} · {}", p.surface.title)),
-                        ),
+                        .child(div().truncate().child(
+                            if p.surface.title.is_empty() || p.surface.title == owner {
+                                owner.to_owned()
+                            } else {
+                                format!("{owner} · {}", p.surface.title)
+                            },
+                        )),
                 );
             }
             content = content.child(item.child(presentation::document_in(

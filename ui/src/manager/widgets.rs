@@ -57,7 +57,7 @@ pub(crate) fn button_with_icon(
         .text_sm()
         .text_color(crate::appearance::color(TEXT))
         .cursor_pointer()
-        .hover(|s| s.bg(crate::appearance::color(0x3a4862)))
+        .hover(|s| s.bg(crate::appearance::interactive_hover()))
         .active(|s| s.bg(crate::appearance::token("elevated")).opacity(0.8))
         .on_click(move |_, _, cx| {
             cx.stop_propagation();

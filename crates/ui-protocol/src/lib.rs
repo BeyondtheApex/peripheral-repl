@@ -148,9 +148,18 @@ pub struct Style {
     pub radius: Option<f32>,
     pub stroke: Option<f32>,
     pub font_size: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_align: Option<TextAlignment>,
     pub color: Option<String>,
     pub background: Option<String>,
     pub track: Option<String>,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TextAlignment {
+    Left,
+    Center,
+    Right,
 }
 pub fn color(value: &str) -> Result<u32> {
     let s = value.strip_prefix('#').unwrap_or(value);

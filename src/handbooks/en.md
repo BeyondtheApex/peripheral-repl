@@ -133,7 +133,9 @@ Enumerate first with `device.list{vendor_id=...,product_id=...}` or the `devices
 
 Validate actual length, report ID, command, sequence and known checksums. Packets contain wire/payload Buffers; read timeout differs from a valid packet. Control read lengths are capacity, not proof of actual reply size. Avoid stale input queues or confusing control and interrupt channels. Feature is implemented, not implicitly permitted.
 
-The GUI backend reads host-owned `.peripheral/policy.json` at startup. Missing policy means read-only. Ordinary Output uses output_rules; hid_rules use operation get_feature/set_feature/send_output_report. Rules contain exact VID/PID/usage/interface and full packets, without arbitrary byte wildcards. Restart the backend after approved policy changes. Plugins must never write the policy themselves. The existing headset/mouse policy only permits previously reviewed battery queries.
+Plugins declare exact privileged operations in `plugin.json.permissions`. Installation or first enable opens a host-owned permission page; the plugin card’s Permissions button lets users allow/revoke individual groups and inspect device/report parameters. Grants are stored separately in `.peripheral/permissions/<plugin-id>.json`; users do not hand-edit this file and plugin Lua cannot modify it. Missing required permissions prevents plugin execution (`awaiting_permission`). New or changed permission scopes require review again. Legacy plugins without permission declarations must update their manifest; they cannot borrow global grants.
+
+The GUI backend still reads `.peripheral/policy.json` as the default REPL/AI debugging policy. Missing policy means read-only. An explicit `policy` on session creation entirely overrides the default, including an empty object; policies are never merged. Plugins always use their own grants. Restart the backend after changing the global file. Ordinary HID Output uses `output_rules`; Feature/control reports use `hid_rules` with operation `get_feature`, `set_feature` or `send_output_report`. Rules match exact VID/PID/usage/interface and complete packets, without byte wildcards.
 
 On receiver removal, close the old channel, clear live measurements and keep the device registration. Match a non-conflicting path/container or trustworthy serial. All-zero serials are not reliable after a port change: request explicit rebinding if identity cannot be established. Rapid same-path replug can leave an old Channel closed. Never replay an uncertain failed write on a newly selected device. Serialize enumeration/query/close in one monitor task and reject old completions with an epoch. Poll batteries at intervals of seconds/minutes with failure backoff; do not aggressively probe sleeping devices.
 
@@ -227,7 +229,7 @@ Replace simulated render data with a verified sampling module before describing 
 | window | Normal independent window |
 | taskbar_preview / texture / xaml | Advanced native targets; verify platform support rather than assuming universal availability |
 
-Node types: row/column/text/icon/progress/ring/spacer/button/image. Style: width/height/size/padding/gap/radius/stroke/font_size/color/background/track; colors #RRGGBB or #RRGGBBAA. progress/ring use 0–100 values; icons use Lucide names. Node IDs must be unique. Limits: 128 nodes, depth 8, 32 KiB per tree; 32 views/session, 64 globally; taskbar item ≤320×64, total width≤640; tray≤64×64. Width/height are logical pixels; x/y screen physical pixels. Keep tray_list compact with one icon/text/small bar row rather than large fixed cards.
+Node types: row/column/text/icon/progress/ring/spacer/button/image. Style: width/height/size/padding/gap/radius/stroke/font_size/text_align/color/background/track; colors #RRGGBB or #RRGGBBAA. progress/ring use 0–100 values; icons use Lucide names. Node IDs must be unique. Limits: 128 nodes, depth 8, 32 KiB per tree; 32 views/session, 64 globally; taskbar item ≤320×64, total width≤640; tray≤64×64. Width/height are logical pixels; x/y screen physical pixels. Keep tray_list compact with one icon/text/small bar row rather than large fixed cards.
 
 Static manifest resources: `{"device":"assets/device.png"}`. `resource.list()` lists IDs. Image node: `{id='art',type='image',style={width=48,height=48},image={resource='device',fit='contain',clip='superellipse',radius=12}}`. fit: contain/cover/fill; clip: none/rounded/circle/superellipse/bevel. PNG/JPEG/WebP only, ≤4 MiB and 4096×4096 and 8 million pixels each; up to 32 assets/16 MiB total. No arbitrary paths, animation, plugin SVG images, video or arbitrary Bezier masks. Targets share rendering; tray icons still need small bitmap readback. Lua sends descriptions and events over IPC rather than binding GPUI objects; stable views do not continuously repaint.
 
@@ -314,3 +316,36 @@ Each session has one environment callback; registering again replaces it. It rec
 Device name/label/detail and displayed values labels/string values may contain catalog keys. Snapshots expose translated `display` data; `display.values` is a list of `{key,label,value}`. Raw `state` remains unchanged. Language updates emit presentation events without renewing updated_unix_ms, last_seen_unix_ms, TTL or measurements. For custom view text, explicitly call `i18n.t()` and pass variable data as parameters.
 
 REPL/MCP `{"op":"ui_environment"}` reads the environment; add `value:{"locale":"en","theme":"dark","accent":"#2984e3"}` to change backend presentation. This does not modify GUI preferences; GUI connection/appearance changes synchronize its own settings. Device monitoring need not restart. Host page, collapse and switch motion is finite; stable views do not repaint continuously. Lua ring animations still run locally in the GUI.
+
+
+## Plugin grants and stable settings forms
+
+`permissions` belongs in the static plugin.json manifest so the host can inspect requests before running Lua. Dynamic settings and visuals remain Lua-defined. This is an exact, previously verified AM .97 battery query example; do not substitute another device ID to probe hardware.
+
+```json
+{"permissions":[{"id":"battery-query","title":"Mouse and dock battery","description":"Only these two verified battery queries.","required":true,"policy":{"output_rules":[{"vendor_id":3725,"product_id":1795,"usage_page":65299,"usage":1,"interface":1,"packets":["060680055a0200cf300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","060600055a02000f300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"]}]}}]}
+```
+
+Each group has an ID, title, explanation and policy. `required` defaults to true. Optional groups use false: the plugin may run without them, but the denied operation returns permission_denied. The policy supports output_rules, hid_rules, ble_write_rules and ble_pair_rules using the exact HID/GATT schemas described above. Never ship user grant files inside a plugin package.
+
+`plugin_permissions` returns revision/ready/reviewed/items, including each complete request and approved state. After explicit user consent, submit `plugin_permissions_save` with plugin, the returned string revision and an approved array of permission IDs. An empty array revokes everything. Stale revisions and unknown IDs are rejected. Missing required grants pauses the plugin; saving sufficient grants resumes an enabled plugin. The old session closes before permissions change so its device handles cannot retain revoked access. No backend restart is needed.
+
+AI must explain the device, operation and exact reports before obtaining consent. Do not auto-approve, broaden rules or switch global policy in response to permission_denied. `session_policy` reports a session’s effective policy. `create` accepts policy for a separate debugging session: `{"op":"create","instance":"readonly","policy":{}}`. Reset/reload retain the session policy. Omitting policy uses the global default.
+
+A minimal global `.peripheral/policy.json` is `{"name":"read-only","output_rules":[],"hid_rules":[],"ble_write_rules":[],"ble_pair_rules":[]}`. For reviewed queries, the policy object above can be used as the file contents with an added name. This global file never adds grants to plugins.
+
+Lua fields accept integer `order`; lower numbers come first, ties sort by field key, and undeclared fields follow in stable key order. Never depend on Lua table iteration order.
+
+```lua
+config.define({type='object',additionalProperties=false,properties={
+ interval_ms={type='integer',order=10,description='Sample interval (ms)',minimum=15000,maximum=300000},
+ cards={type='boolean',order=20,description='Quick-view cards'},
+ combine_devices={type='boolean',order=30,description='Combine mouse and dock'}
+}}, {interval_ms=30000,cards=true,combine_devices=true})
+```
+
+The editor shows numeric ranges and validates every field before submitting. Errors preserve inputs and identify the fields; a prominent notification stays visible. Successful saves are confirmed and repeated submissions are suppressed while saving. In this example 3000 is below minimum 15000 and will not save.
+
+Node style.width/style.height specify fixed logical dimensions. The containing document still scales proportionally to its target; text with a fixed width truncates when necessary. Give quick-view icons, labels, bars and values fixed widths to keep columns aligned. AM .97’s combine option controls both quick-view rows and cards; the taskbar always has one dual-battery item. Separate mode restores two items, with battery-charging as the dock icon.
+
+`style.text_align` sets text alignment inside its declared width: `left` (default), `center`, or `right`. For centered card labels, declare both `width` and `text_align="center"`.
