@@ -583,6 +583,12 @@ impl WindowsWindow {
             }
             unsafe { SetWindowPlacement(hwnd, &placement)? };
         } else {
+            // Hidden windows still need their requested monitor and bounds.
+            // Leaving CW_USEDEFAULT until activation gives non-activating menus
+            // a desktop-sized client area and an extra DPI resize on first show.
+            let mut hidden_placement = placement;
+            hidden_placement.showCmd = SW_HIDE.0 as u32;
+            unsafe { SetWindowPlacement(hwnd, &hidden_placement)? };
             this.state.initial_placement.set(Some(WindowOpenStatus {
                 placement,
                 state: WindowOpenState::Windowed,

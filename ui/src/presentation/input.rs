@@ -16,6 +16,13 @@ pub(super) fn bind(
     if !p.surface.interactive {
         return element;
     }
+    if events.left_click.is_some() || events.right_click.is_some() || legacy.is_some() {
+        // A subtle paint-only highlight preserves the Lua-defined geometry and
+        // background, and applies to both left- and right-click controls.
+        element = element
+            .hover(|s| s.opacity(0.82))
+            .active(|s| s.opacity(0.65));
+    }
     for (button, name) in [(MouseButton::Left, "left"), (MouseButton::Right, "right")] {
         if events.action(name).is_none() && !(name == "left" && legacy.is_some()) {
             continue;

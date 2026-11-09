@@ -34,7 +34,8 @@ impl Application {
                 })
         };
         if !unchanged {
-            if kind == SurfaceKind::Popup {
+            let popup_position = items[0].surface.x.zip(items[0].surface.y);
+            let popup_parent = if kind == SurfaceKind::Popup {
                 let mut root = &items[0];
                 for _ in 0..8 {
                     let Some(parent) = root.surface.parent.as_deref() else {
@@ -55,7 +56,7 @@ impl Application {
                     format!("{}/{}", root.instance, root.id)
                 };
                 native::popup::register(s.hwnd, family)?;
-                let parent = items[0]
+                items[0]
                     .surface
                     .parent
                     .as_ref()
@@ -69,11 +70,10 @@ impl Application {
                                     .any(|p| p.instance == items[0].instance && p.id == *id)
                         })
                     })
-                    .map(|s| s.hwnd);
-                if s.view.read(cx).publications.is_empty() {
-                    native::popup::show_at(s.hwnd, parent)?;
-                }
-            }
+                    .map(|s| s.hwnd)
+            } else {
+                None
+            };
             native::set_title(
                 s.hwnd,
                 &items
@@ -126,6 +126,13 @@ impl Application {
                 v.publications = items;
                 cx.notify();
             });
+            if kind == SurfaceKind::Popup && !native::is_visible(s.hwnd) {
+                if let Some((x, y)) = popup_position {
+                    native::popup::show_positioned(s.hwnd, x.round() as i32, y.round() as i32)?;
+                } else {
+                    native::popup::show_at(s.hwnd, popup_parent)?;
+                }
+            }
             if kind == SurfaceKind::Tray {
                 let image = s.window.update(cx, |_, w, cx| {
                     w.refresh();

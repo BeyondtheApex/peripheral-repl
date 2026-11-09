@@ -110,7 +110,9 @@ impl Application {
                 })
             },
             focus: !floating,
-            show: true,
+            // Popups receive their publication and final native coordinates
+            // before their first visible frame. Export surfaces stay offscreen.
+            show: !floating,
             kind: if floating {
                 WindowKind::PopUp
             } else {
@@ -158,6 +160,17 @@ impl Application {
         if floating {
             native::floating_frame(hwnd, true)?;
         }
+        if kind == SurfaceKind::Popup {
+            // Removing the initial native frame changes the client rectangle.
+            // Keep the full popup at its requested logical size, not the old
+            // client size plus the frame that GPUI measured during creation.
+            let scale = window.update(cx, |_, window, _| window.scale_factor())?;
+            native::resize_floating(
+                hwnd,
+                (dimensions.0 * scale).round() as i32,
+                (dimensions.1 * scale).round() as i32,
+            )?;
+        }
         native::appearance::apply(
             hwnd,
             id == "main",
@@ -198,7 +211,7 @@ impl Application {
                 (dimensions.1 * scale).round() as i32,
             )?;
             gpui_windows::frame_bridge::external_only(hwnd);
-        } else {
+        } else if kind != SurfaceKind::Popup {
             native::show(hwnd, true);
         }
         if id == "main" {

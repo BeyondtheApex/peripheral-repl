@@ -50,21 +50,14 @@ impl Application {
                         &std::env::current_exe()?,
                         &self.backend.endpoint,
                     )?;
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    self.status("已复制 MCP 配置；请粘贴到 AI 客户端并重新加载。".into(), cx);
+                    self.copy_text("config", text, cx)?;
                 }
                 "ai_copy_prompt" => {
                     ensure!(
                         peripheral_repl::guide::get(language).is_some(),
                         "unknown language"
                     );
-                    cx.write_to_clipboard(ClipboardItem::new_string(super::prompt(
-                        &workspace, language,
-                    )));
-                    self.status(
-                        "已复制任务提示词；补充你的设备、功能和显示位置后发送给 AI。".into(),
-                        cx,
-                    );
+                    self.copy_text("prompt", super::prompt(&workspace, language), cx)?;
                 }
                 "guide_open" => {
                     let guide =
@@ -82,15 +75,11 @@ impl Application {
                 "guide_copy" => {
                     let guide =
                         peripheral_repl::guide::get(language).context("unknown document")?;
-                    cx.write_to_clipboard(ClipboardItem::new_string(format!(
-                        "{}\n\n{}",
-                        super::prompt(&workspace, language),
-                        guide.text
-                    )));
-                    self.status(
-                        "已复制完整手册和当前工作区说明，可直接发送给 AI。".into(),
+                    self.copy_text(
+                        &format!("guide-{language}"),
+                        format!("{}\n\n{}", super::prompt(&workspace, language), guide.text),
                         cx,
-                    );
+                    )?;
                 }
                 "ai_check" => {
                     if manager.ai_checking {

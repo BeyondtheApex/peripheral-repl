@@ -9,6 +9,7 @@ mod ai;
 pub(crate) mod configuration;
 mod dashboard_settings;
 mod devices;
+mod feedback;
 mod flip;
 pub(crate) mod motion;
 mod navigation;
@@ -39,6 +40,8 @@ pub struct Manager {
     pub ai_checking: bool,
     pub ai_result: String,
     pub guide: Option<String>,
+    pub copied: std::collections::BTreeMap<String, u64>,
+    pub copy_revision: u64,
     pub device_faces: std::collections::BTreeMap<String, (bool, u64)>,
     pub page_revision: u64,
 }
@@ -67,6 +70,8 @@ impl Manager {
             ai_checking: false,
             ai_result: "尚未检测 · 启动后台后可验证 MCP 连接。".into(),
             guide: None,
+            copied: Default::default(),
+            copy_revision: 0,
             device_faces: Default::default(),
             page_revision: 0,
         }

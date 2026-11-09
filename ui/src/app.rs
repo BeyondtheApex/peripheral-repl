@@ -57,6 +57,9 @@ impl Application {
         });
     }
     pub fn command(&mut self, v: &Value, cx: &mut App) -> Result<Value> {
+        if let Some(result) = self.clipboard_command(v, cx) {
+            return result;
+        }
         if let Some(result) = self.app_menu_command(v, cx) {
             return result;
         }

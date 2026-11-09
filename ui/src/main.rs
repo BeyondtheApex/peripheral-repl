@@ -6,6 +6,7 @@ mod appearance;
 mod backend;
 mod backend_control;
 mod backend_status;
+mod clipboard;
 mod control;
 mod dashboard;
 mod device_updates;

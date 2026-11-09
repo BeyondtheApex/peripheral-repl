@@ -27,13 +27,6 @@ impl Application {
                             (options.width as f32, options.height as f32),
                             cx,
                         )?;
-                        let surface = &self.surfaces[ID];
-                        let scale = surface.window.update(cx, |_, w, _| w.scale_factor())?;
-                        native::resize_floating(
-                            surface.hwnd,
-                            (options.width as f32 * scale).round() as i32,
-                            (options.height as f32 * scale).round() as i32,
-                        )?;
                         self.refresh_dashboard(cx)?;
                         let s = &self.surfaces[ID];
                         native::popup::register(s.hwnd, ID.into())?;

@@ -17,6 +17,20 @@ pub fn enter(id: impl Into<SharedString>, child: AnyElement) -> AnyElement {
         )
         .into_any_element()
 }
+/// Popup backgrounds cover the client area throughout entry; translating their
+/// full-height root would expose a strip of native backdrop along an edge.
+pub fn popup_enter(id: impl Into<SharedString>, child: AnyElement) -> AnyElement {
+    div()
+        .size_full()
+        .overflow_hidden()
+        .child(child)
+        .with_animation(
+            id.into(),
+            Animation::new(Duration::from_millis(140)).with_max_fps(60.),
+            |d, t| d.opacity(t),
+        )
+        .into_any_element()
+}
 pub fn reveal(id: impl Into<SharedString>, open: bool, child: AnyElement) -> AnyElement {
     gpui_kit::component::collapsible::Collapsible::new()
         .motion_id(id.into())

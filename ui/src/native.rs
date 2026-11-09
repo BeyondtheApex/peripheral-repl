@@ -18,6 +18,7 @@ use windows::{
 };
 
 pub mod appearance;
+pub mod clipboard;
 mod messages;
 pub mod popup;
 mod preview;
@@ -256,6 +257,9 @@ pub fn show(h: usize, visible: bool) {
     unsafe {
         let _ = ShowWindow(handle(h), if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
     }
+}
+pub fn is_visible(h: usize) -> bool {
+    unsafe { IsWindowVisible(handle(h)).as_bool() }
 }
 /// GPUI caches the original caption border and its resize may activate HWNDs.
 /// Frameless surfaces use the actual current rectangle with NOACTIVATE instead.

@@ -85,13 +85,7 @@ fn dismiss_outside(point: POINT) {
     });
 }
 pub fn show_at(h: usize, parent: Option<usize>) -> Result<()> {
-    MENUS.with(|menus| {
-        if let Some((_, pending)) = menus.borrow_mut().get_mut(&h) {
-            *pending = false;
-        }
-    });
     unsafe {
-        hook(h)?.popup.set(true);
         let mut point = POINT::default();
         GetCursorPos(&mut point)?;
         let mut owner = RECT::default();
@@ -141,6 +135,20 @@ pub fn show_at(h: usize, parent: Option<usize>) -> Result<()> {
             info.rcWork.top,
             (info.rcWork.bottom - height).max(info.rcWork.top),
         );
+        show_positioned(h, x, y)
+    }
+}
+
+/// Position and expose a prepared popup in one native operation, without
+/// activating it or briefly showing its original centered coordinates.
+pub fn show_positioned(h: usize, x: i32, y: i32) -> Result<()> {
+    MENUS.with(|menus| {
+        if let Some((_, pending)) = menus.borrow_mut().get_mut(&h) {
+            *pending = false;
+        }
+    });
+    hook(h)?.popup.set(true);
+    unsafe {
         SetWindowPos(
             handle(h),
             Some(HWND_TOPMOST),
@@ -150,6 +158,6 @@ pub fn show_at(h: usize, parent: Option<usize>) -> Result<()> {
             0,
             SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE,
         )?;
-        Ok(())
     }
+    Ok(())
 }

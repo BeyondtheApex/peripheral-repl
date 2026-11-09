@@ -31,10 +31,21 @@ pub(crate) fn button(
     body: Value,
     sender: &async_channel::Sender<Request>,
 ) -> AnyElement {
+    button_with_icon(id, title, icon(ico).into_any_element(), body, sender)
+}
+pub(crate) fn button_with_icon(
+    id: impl Into<SharedString>,
+    title: &str,
+    graphic: AnyElement,
+    body: Value,
+    sender: &async_channel::Sender<Request>,
+) -> AnyElement {
     let sender = sender.clone();
     let icon_only = title.is_empty();
+    let id = id.into();
     div()
-        .id(id.into())
+        .id(id.clone())
+        .debug_selector(move || id.to_string())
         .flex()
         .items_center()
         .justify_center()
@@ -47,7 +58,11 @@ pub(crate) fn button(
         .text_color(crate::appearance::color(TEXT))
         .cursor_pointer()
         .hover(|s| s.bg(crate::appearance::color(0x3a4862)))
-        .on_click(move |_, _, _| send(&sender, body.clone()))
+        .active(|s| s.bg(crate::appearance::token("elevated")).opacity(0.8))
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            send(&sender, body.clone());
+        })
         .child(
             div()
                 .size(px(17.))
@@ -55,7 +70,7 @@ pub(crate) fn button(
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(icon(ico)),
+                .child(graphic),
         )
         .children((!icon_only).then(|| div().child(crate::i18n::tr(title))))
         .into_any_element()
@@ -71,16 +86,22 @@ pub(crate) fn toggle(
     let id = id.into();
     div()
         .id(id.clone())
+        .group(id.clone())
         .w(px(44.))
         .h(px(25.))
         .relative()
         .rounded_full()
         .cursor_pointer()
-        .on_click(move |_, _, _| send(&sender, body.clone()))
+        .hover(|s| s.opacity(0.82))
+        .active(|s| s.opacity(0.65))
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            send(&sender, body.clone());
+        })
         .with_spring(
             SharedString::from(format!("switch-{id}")),
             motion::control_spring(if enabled { 1. } else { 0. }),
-            |d, t| {
+            move |d, t| {
                 d.bg(motion::mix_color(
                     crate::appearance::token("border"),
                     crate::appearance::token("accent"),
@@ -93,7 +114,8 @@ pub(crate) fn toggle(
                         .left(px(3. + 19. * t.clamp(0., 1.)))
                         .size(px(19.))
                         .rounded_full()
-                        .bg(crate::appearance::color(0xf4f7fb)),
+                        .bg(crate::appearance::color(0xf4f7fb))
+                        .group_hover(id.clone(), |s| s.bg(crate::appearance::token("text"))),
                 )
             },
         )

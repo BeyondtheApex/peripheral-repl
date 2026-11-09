@@ -8,8 +8,7 @@ pub const ID: &str = "app-tray-menu";
 pub fn render(status: BackendStatus, sender: &async_channel::Sender<Request>) -> AnyElement {
     let running = status == BackendStatus::Running;
     let mut menu = div()
-        .w_full()
-        .h(px(260.))
+        .size_full()
         .rounded(px(12.))
         .bg(crate::appearance::popup_background(None))
         .p_2()
@@ -90,7 +89,7 @@ pub fn render(status: BackendStatus, sender: &async_channel::Sender<Request>) ->
             row
         });
     }
-    crate::manager::motion::enter("app-menu-enter", menu.into_any_element())
+    crate::manager::motion::popup_enter("app-menu-enter", menu.into_any_element())
 }
 impl Application {
     pub(crate) fn app_menu_command(

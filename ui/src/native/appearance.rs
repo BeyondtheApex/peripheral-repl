@@ -79,6 +79,19 @@ pub fn apply(h: usize, main: bool, popup: bool, options: &crate::appearance::Opt
     // Acrylic/Mica behind our transparent client area. Rounding only the GPUI
     // root would leave a square native backdrop visible at the corners.
     apply_corners(hwnd);
+    if popup {
+        // Frameless menus paint their own edge. Suppress the additional DWM
+        // outline, which otherwise shows as a dark strip at the bottom.
+        let color = DWMWA_COLOR_NONE;
+        unsafe {
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_BORDER_COLOR,
+                (&color as *const u32).cast(),
+                std::mem::size_of_val(&color) as u32,
+            );
+        }
+    }
     // GPUI owns both the native backdrop and transparent swapchain state.
     // Do not layer a second DWM backdrop over its Acrylic composition policy.
     let status = gpui_windows::backdrop::status(h);

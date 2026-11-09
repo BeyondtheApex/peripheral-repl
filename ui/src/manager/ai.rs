@@ -21,12 +21,12 @@ impl Manager {
                     button(format!("ai-format-{format}"),if self.ai_format==format {if format=="json"{"✓ 通用 MCP JSON"}else{"✓ Codex TOML"}}else{title},"code",
                         json!({"op":"ai_format","format":format}),sender)
                 })
-            ).child(div().flex_1()).child(button("ai-copy-config","复制配置","copy",json!({"op":"ai_copy_config"}),sender)))
+            ).child(div().flex_1()).child(self.copy_button("ai-copy-config","复制配置","config",json!({"op":"ai_copy_config"}),sender)))
             .child(div().id("ai-config-preview").h(px(112.)).overflow_y_scroll().p_3().rounded_lg().bg(crate::appearance::color(BG))
                 .font_family("Cascadia Code").text_xs().children(config.lines().map(|line|div().child(line.to_owned()))))
             .child(div().flex().flex_wrap().items_center().gap_2()
                 .child(button("ai-check",if self.ai_checking {"检测中…"}else{"检测 MCP"},"plug",json!({"op":"ai_check"}),sender))
-                .child(button("ai-copy-prompt","复制任务提示词","message-square",json!({"op":"ai_copy_prompt"}),sender))
+                .child(self.copy_button("ai-copy-prompt","复制任务提示词","prompt",json!({"op":"ai_copy_prompt"}),sender))
                 .child(label(self.ai_result.clone())))
             .child(label("模型和登录在 AI 客户端配置；无需填写令牌。检测验证本机桥接，不代表客户端已加载配置。"))
             .into_any_element()
@@ -57,7 +57,7 @@ impl Manager {
                     .rounded_lg()
                     .bg(crate::appearance::color(PANEL))
                     .child(icon("book-open"))
-                    .child(div().flex_1().child(g.title))
+                    .child(div().flex_1().min_w(px(160.)).child(g.title))
                     .child(button(
                         format!("guide-{}", g.language),
                         "阅读",
@@ -65,10 +65,10 @@ impl Manager {
                         json!({"op":"guide_open","language":g.language}),
                         sender,
                     ))
-                    .child(button(
+                    .child(self.copy_button(
                         format!("guide-copy-{}", g.language),
                         "复制给 AI",
-                        "copy",
+                        &format!("guide-{}", g.language),
                         json!({"op":"guide_copy","language":g.language}),
                         sender,
                     ))
@@ -99,10 +99,10 @@ impl Manager {
                         sender,
                     ))
                     .child(div().flex_1())
-                    .child(button(
+                    .child(self.copy_button(
                         "guide-copy",
                         "复制完整文档给 AI",
-                        "copy",
+                        &format!("guide-{language}"),
                         json!({"op":"guide_copy","language":language}),
                         sender,
                     )),
@@ -118,5 +118,53 @@ impl Manager {
                     )),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Manager;
+    use crate::control::Request;
+    use gpui_core::{
+        self as gpui, Context, IntoElement, Modifiers, ParentElement, Render, Styled,
+        TestAppContext, VisualTestContext, Window, div, px, size,
+    };
+    use serde_json::json;
+
+    #[gpui::test]
+    fn both_document_list_copy_buttons_dispatch_at_compact_width(cx: &mut TestAppContext) {
+        struct Fixture {
+            manager: Manager,
+            sender: async_channel::Sender<Request>,
+        }
+        impl Render for Fixture {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().w_full().child(self.manager.guide_list(&self.sender))
+            }
+        }
+        cx.update(gpui_kit::init);
+        let (sender, receiver) = async_channel::bounded(8);
+        let window = cx.add_window(|window, cx| Fixture {
+            manager: Manager::new(window, cx),
+            sender,
+        });
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(size(px(640.), px(400.)));
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        for (selector, language) in [("guide-copy-zh-CN", "zh-CN"), ("guide-copy-en", "en")] {
+            let bounds = visual.debug_bounds(selector).expect("copy button rendered");
+            assert!(
+                bounds.right() <= px(640.) && bounds.bottom() <= px(400.),
+                "{bounds:?}"
+            );
+            visual.simulate_click(bounds.center(), Modifiers::default());
+            let request = receiver
+                .try_recv()
+                .expect("visible copy button receives mouse click");
+            assert_eq!(request.body, json!({"op":"guide_copy","language":language}));
+            assert!(receiver.try_recv().is_err(), "one click must dispatch once");
+        }
     }
 }

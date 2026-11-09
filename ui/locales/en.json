@@ -172,5 +172,6 @@
   "项目视图": "List view",
   "预览弹窗": "Preview panel",
   "高级配置 JSON（可选）": "Advanced configuration JSON (optional)",
-  "Peripheral · 插件管理": "Peripheral · Plugin manager"
+  "Peripheral · 插件管理": "Peripheral · Plugin manager",
+  "复制失败，请重试": "Could not copy. Please try again."
 }
