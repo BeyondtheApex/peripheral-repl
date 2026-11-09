@@ -94,6 +94,7 @@ impl Application {
         } else {
             Bounds::centered(None, size(px(dimensions.0), px(dimensions.1)), cx)
         };
+        let hidden = id == "main" && std::mem::take(&mut self.initial_main_hidden);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: if floating {
@@ -109,10 +110,10 @@ impl Application {
                     ..Default::default()
                 })
             },
-            focus: !floating,
+            focus: !floating && !hidden,
             // Popups receive their publication and final native coordinates
             // before their first visible frame. Export surfaces stay offscreen.
-            show: !floating,
+            show: !floating && !hidden,
             kind: if floating {
                 WindowKind::PopUp
             } else {
@@ -211,7 +212,7 @@ impl Application {
                 (dimensions.1 * scale).round() as i32,
             )?;
             gpui_windows::frame_bridge::external_only(hwnd);
-        } else if kind != SurfaceKind::Popup {
+        } else if kind != SurfaceKind::Popup && !hidden {
             native::show(hwnd, true);
         }
         if id == "main" {

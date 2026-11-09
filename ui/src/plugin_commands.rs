@@ -51,6 +51,9 @@ impl Application {
                             m.transition();
                         }
                         m.page = page.into();
+                        if page == "settings" {
+                            m.startup = crate::startup::state();
+                        }
                         m.confirm = None;
                     });
                 }

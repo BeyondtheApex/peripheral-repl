@@ -44,6 +44,7 @@ pub struct Manager {
     pub copy_revision: u64,
     pub device_faces: std::collections::BTreeMap<String, (bool, u64)>,
     pub page_revision: u64,
+    pub startup: crate::startup::State,
 }
 impl Manager {
     pub fn new(window: &mut Window, cx: &mut App) -> Self {
@@ -74,6 +75,7 @@ impl Manager {
             copy_revision: 0,
             device_faces: Default::default(),
             page_revision: 0,
+            startup: crate::startup::state(),
         }
     }
     pub fn transition(&mut self) {

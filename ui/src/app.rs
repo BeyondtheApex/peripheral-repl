@@ -18,9 +18,10 @@ pub(crate) struct Application {
     pub backend_status: crate::backend_status::BackendStatus,
     pub dashboard_options: crate::dashboard::Options,
     pub device_expiry: BTreeMap<String, Task<()>>,
+    pub initial_main_hidden: bool,
 }
 impl Application {
-    pub fn new(commands: async_channel::Sender<control::Request>) -> Self {
+    pub fn new(commands: async_channel::Sender<control::Request>, start_hidden: bool) -> Self {
         let backend = backend::Client::new(commands.clone());
         let enabled = std::fs::read(backend::data_dir().join("preferences.json"))
             .ok()
@@ -39,6 +40,7 @@ impl Application {
             backend_status: Default::default(),
             dashboard_options: crate::dashboard::Options::load(),
             device_expiry: BTreeMap::new(),
+            initial_main_hidden: start_hidden,
         }
     }
     pub fn manager(&mut self, cx: &mut App, update: impl FnOnce(&mut Manager, &mut App)) {
@@ -57,6 +59,9 @@ impl Application {
         });
     }
     pub fn command(&mut self, v: &Value, cx: &mut App) -> Result<Value> {
+        if let Some(result) = self.startup_command(v, cx) {
+            return result;
+        }
         if let Some(result) = self.clipboard_command(v, cx) {
             return result;
         }

@@ -13,6 +13,7 @@ impl Manager {
             )
             .child(label("后台连接、插件存放位置和系统显示选项。"))
             .child(crate::appearance::settings::panel(sender))
+            .child(crate::startup::panel(&self.startup, sender))
             .child(
                 div()
                     .p_5()

@@ -173,5 +173,13 @@
   "预览弹窗": "Preview panel",
   "高级配置 JSON（可选）": "Advanced configuration JSON (optional)",
   "Peripheral · 插件管理": "Peripheral · Plugin manager",
-  "复制失败，请重试": "Could not copy. Please try again."
+  "复制失败，请重试": "Could not copy. Please try again.",
+  "启动与登录": "Startup and sign-in",
+  "登录后自动启动": "Start automatically after sign-in",
+  "自动启动时收起到托盘": "Start in the system tray at sign-in",
+  "仅对当前 Windows 用户生效。自动启动时连接或启动后台，并恢复已启用的插件。": "Applies to the current Windows user. At sign-in, connects to or starts the backend and restores enabled plugins.",
+  "自启动指向其他安装位置，可修复为当前程序。": "The startup entry points to another installation. Update it to use this application.",
+  "使用当前程序": "Use this application",
+  "Windows 已禁用此启动项，请在系统启动设置中启用。": "Windows has disabled this startup entry. Enable it in Windows startup settings.",
+  "打开系统启动设置": "Open Windows startup settings"
 }

@@ -20,6 +20,7 @@ mod plugin_commands;
 mod presentation;
 mod publications;
 mod shell;
+mod startup;
 mod surface_commands;
 mod surfaces;
 mod texture;
@@ -71,6 +72,7 @@ fn main() -> Result<()> {
             _ => {}
         }
     }
+    let autostart = args.get(1).is_some_and(|s| s == "--autostart");
     let _singleton = native::singleton()?;
     let (sender, receiver, session) = control::start()?;
     let _ = distribution::write_report();
@@ -80,13 +82,20 @@ fn main() -> Result<()> {
         .run(move |cx| {
             gpui_kit::init(cx);
             appearance::apply(&appearance::Options::load(), cx);
-            let mut application = app::Application::new(sender);
+            let mut application =
+                app::Application::new(sender, autostart && startup::state().start_in_tray);
             if let Err(e) = application.open("main", SurfaceKind::Window, (1120., 780.), cx) {
                 eprintln!("startup: {e:#}");
                 cx.quit();
                 return;
             }
             application.start_watch();
+            if autostart && let Err(error) = application.control_backend("start", cx) {
+                application.status(format!("{error:#}"), cx);
+                if let Some(main) = application.surfaces.get("main") {
+                    native::show(main.hwnd, true);
+                }
+            }
             cx.spawn(async move |cx| {
                 while let Ok(request) = receiver.recv().await {
                     if request
