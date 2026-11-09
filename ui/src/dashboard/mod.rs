@@ -1,6 +1,8 @@
 //! Application-owned tray dashboard. Lua contributes items, never its window layout settings.
 mod commands;
 mod options;
+#[cfg(test)]
+mod tests;
 use crate::{control::Request, presentation};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -57,23 +59,18 @@ impl Dashboard {
             self.options.card_height as f32 * scale
         };
         let mut content = div()
-            .flex()
+            // Align the complete grid as one block in the outer container.
+            // Per-line flex centering would shift an incomplete final row.
+            .grid()
+            .grid_cols(cols as u16)
             .flex_shrink_0()
-            .flex_wrap()
             .w(px(if list {
                 width
             } else {
                 cols as f32 * width + (cols - 1) as f32 * 8. * scale
             }))
             .gap(px(if list { 4. } else { 8. * scale }))
-            .items_start()
-            .when(
-                self.options.horizontal_alignment == Alignment::Center,
-                |d| d.justify_center(),
-            )
-            .when(self.options.horizontal_alignment == Alignment::End, |d| {
-                d.justify_end()
-            });
+            .items_start();
         for p in items {
             let owner = self
                 .owners
@@ -82,6 +79,10 @@ impl Dashboard {
                 .unwrap_or(&p.instance);
             let mut item = div()
                 .id(SharedString::from(format!("item-{}/{}", p.instance, p.id)))
+                .debug_selector({
+                    let id = format!("dashboard-item-{}", p.id);
+                    move || id
+                })
                 .w(px(width))
                 .h(px(height))
                 .flex_shrink_0()
