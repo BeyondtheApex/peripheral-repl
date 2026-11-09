@@ -1,0 +1,33 @@
+Vendored from crates.io gpui-pre-windows 0.3.11 (Zed revision f816e1f9263e3a8ef63c4baaa02e1441ce1c6038).
+Original source: https://github.com/zed-industries/zed
+License: Apache-2.0; see LICENSE-APACHE.
+
+Modified for Peripheral in 2026. Changes are described below.
+
+# Peripheral backdrop integration
+
+`src/backdrop.rs` is the single owner of window composition state. Transparent clears the legacy accent policy; it must never enable ACCENT_ENABLE_TRANSPARENTGRADIENT (2), which adds the Windows accent-color fill. Acrylic uses policy 4 with a neutral 1/255-alpha tint, leaving the visible tint to the GPUI surface. This supports nonactivating tray popups without relying on the system-backdrop activation fallback. Mica uses DWMWA_SYSTEMBACKDROP_TYPE after clearing the legacy accent policy.
+
+Every transition resets legacy accent, DWM backdrop and extended frame margins before applying the new material. API failures are recorded per HWND and exposed to the host for an opaque fallback. No screenshots, CPU blur, extra render textures or per-frame native calls are used. Native policy 4 is the same undocumented Windows composition path used by upstream GPUI; failures are surfaced instead of ignored. HWND status is removed on destruction.
+
+
+Based on crates.io gpui-pre-windows 0.3.11, Zed revision
+f816e1f9263e3a8ef63c4baaa02e1441ce1c6038, Apache-2.0.
+
+Local changes: public frame_bridge module; DirectXRenderer::draw reports actual
+frame submission timing and exposes an opt-in GPU texture observer before Present.
+No CPU readback is added to the normal rendering path. Timing is CPU submission,
+not GPU execution latency. Consumers must be bounded and nonblocking.
+
+external_only skips Present for an exporter whose output is consumed by a remote
+surface. Normal windows and overlays keep their direct GPUI presentation path.
+
+WindowsWindow now implements GPUI's existing frame_waker / schedule_frame hooks.
+The VSync thread waits for coalesced frame demand instead of invalidating every
+window continuously. A one-second idle timeout only checks shutdown/device health.
+Deferred reentrant draws reschedule demand. This avoids persistent per-VSync CPU
+work in an idle overlay. Revalidate animations, native resizing, input, visibility
+and device recovery when updating the vendored backend. GPU reset and touchscreen
+direct-manipulation recovery have not been fault-injected on this machine.
+
+Package metadata was trimmed to library targets; upstream examples and development documentation are excluded from this distribution.

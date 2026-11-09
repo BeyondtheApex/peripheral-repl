@@ -1,0 +1,101 @@
+use super::*;
+pub(super) const BG: u32 = 0x11151b;
+pub(super) const PANEL: u32 = 0x1a202a;
+pub(super) const TEXT: u32 = 0xe7edf7;
+pub(super) const MUTED: u32 = 0x96a2b7;
+pub fn icon(name: &str) -> Svg {
+    svg()
+        .path(SharedString::from(format!("icons/{name}.svg")))
+        .size(px(17.))
+        .text_color(crate::appearance::color(0x9aafff))
+}
+pub(crate) fn label(text: impl Into<SharedString>) -> Div {
+    let text: SharedString = text.into();
+    div()
+        .text_sm()
+        .text_color(crate::appearance::color(MUTED))
+        .child(crate::i18n::tr(&text))
+}
+pub(super) fn send(sender: &async_channel::Sender<Request>, body: Value) {
+    let (tx, _) = std::sync::mpsc::sync_channel(1);
+    let _ = sender.try_send(Request {
+        body,
+        reply: tx,
+        expires: None,
+    });
+}
+pub(crate) fn button(
+    id: impl Into<SharedString>,
+    title: &str,
+    ico: &str,
+    body: Value,
+    sender: &async_channel::Sender<Request>,
+) -> AnyElement {
+    let sender = sender.clone();
+    let icon_only = title.is_empty();
+    div()
+        .id(id.into())
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(if icon_only { 0. } else { 8. }))
+        .px_3()
+        .py_2()
+        .rounded_lg()
+        .bg(crate::appearance::color(0x293349))
+        .text_sm()
+        .text_color(crate::appearance::color(TEXT))
+        .cursor_pointer()
+        .hover(|s| s.bg(crate::appearance::color(0x3a4862)))
+        .on_click(move |_, _, _| send(&sender, body.clone()))
+        .child(
+            div()
+                .size(px(17.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(icon(ico)),
+        )
+        .children((!icon_only).then(|| div().child(crate::i18n::tr(title))))
+        .into_any_element()
+}
+
+pub(crate) fn toggle(
+    id: impl Into<SharedString>,
+    enabled: bool,
+    body: Value,
+    sender: &async_channel::Sender<Request>,
+) -> AnyElement {
+    let sender = sender.clone();
+    let id = id.into();
+    div()
+        .id(id.clone())
+        .w(px(44.))
+        .h(px(25.))
+        .relative()
+        .rounded_full()
+        .cursor_pointer()
+        .on_click(move |_, _, _| send(&sender, body.clone()))
+        .with_spring(
+            SharedString::from(format!("switch-{id}")),
+            motion::control_spring(if enabled { 1. } else { 0. }),
+            |d, t| {
+                d.bg(motion::mix_color(
+                    crate::appearance::token("border"),
+                    crate::appearance::token("accent"),
+                    t,
+                ))
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(3.))
+                        .left(px(3. + 19. * t.clamp(0., 1.)))
+                        .size(px(19.))
+                        .rounded_full()
+                        .bg(crate::appearance::color(0xf4f7fb)),
+                )
+            },
+        )
+        .into_any_element()
+}

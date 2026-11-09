@@ -1,0 +1,15 @@
+Vendored from crates.io gpui-pre 0.3.11 (Zed revision f816e1f9263e3a8ef63c4baaa02e1441ce1c6038).
+Original source: https://github.com/zed-industries/zed
+License: Apache-2.0; see LICENSE-APACHE.
+
+Modified for Peripheral in 2026. Changes are described below.
+
+# Local patch to gpui-pre 0.3.11
+
+Source: crates.io gpui-pre 0.3.11, Apache-2.0. The upstream package and license remain intact.
+
+Added `Window::paint_with_horizontal_scale` and `scene/paint_scale.rs`: a scoped paint-only horizontal compression for finite transitions of uncached element trees. Layout is stable; the caller blocks input until the transition completes. Glyphs/SVGs use the existing GPU transform matrix; images and geometry use projected bounds. No scene screenshots, CPU pixel readbacks, extra textures, shader ABI changes or DLL changes. Rounded corners remain circular (compressed radius), not a general perspective transform.
+
+Scale is bounded to 0.001..1. Primitive draw ordering stays conservative. Captured paint operations are projected too. This is deliberately not a generic arbitrary-transform or cached-view API. Regression test covers scope and paint replay; application validation covers real card text/images, finite animation and clicks after completion.
+
+Package metadata was trimmed to library targets; upstream examples and development documentation are excluded from this distribution.

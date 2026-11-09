@@ -1,0 +1,37 @@
+[package]
+name = "peripheral-repl"
+version = "0.3.0"
+edition = "2024"
+description = "Local, scriptable peripheral runtime with Lua, JSON RPC and MCP"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+hidapi = "=2.6.7"
+mlua = { version = "=0.12.2", features = ["lua54", "vendored", "serialize", "error-send", "async"] }
+btleplug = { version = "=0.13.5", features = ["serde"] }
+tokio = { version = "1.54", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+futures = "0.3"
+rustyline = "=19.0.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+peripheral-ui-protocol = { path = "crates/ui-protocol" }
+uuid = { version = "1.18", features = ["v4"] }
+sha2 = "0.10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+tempfile = "3.23"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.62.2", features = ["Devices_Bluetooth", "Devices_Bluetooth_GenericAttributeProfile", "Devices_Enumeration", "Foundation", "Storage_Streams"] }
+
+windows-future = "=0.3.2"
+windows-collections = "=0.3.2"
+
+[dev-dependencies]
+
+[profile.release]
+lto = "thin"
+strip = true
