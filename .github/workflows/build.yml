@@ -7,9 +7,9 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
-      - name: Install stable Rust
+      - name: Install repository Rust toolchain
         shell: pwsh
-        run: rustup update stable
+        run: rustup show active-toolchain
       - name: Offline runtime regression tests
         shell: pwsh
         run: |

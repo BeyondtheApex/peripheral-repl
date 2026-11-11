@@ -285,7 +285,7 @@ impl Budget {
     }
     pub fn reserve(&self, n: usize) -> mlua::Result<()> {
         self.0
-            .fetch_update(
+            .try_update(
                 std::sync::atomic::Ordering::AcqRel,
                 std::sync::atomic::Ordering::Acquire,
                 |v| v.checked_add(n).filter(|total| *total <= 1024 * 1024),

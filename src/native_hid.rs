@@ -275,6 +275,22 @@ pub fn serve() -> anyhow::Result<()> {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    fn ready_worker(script: &str) -> NativeHid {
+        let mut command = Command::new("powershell.exe");
+        command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+        let worker = NativeHid::spawn_command(command).unwrap();
+        // Test interpreter startup is not native I/O. Wait for the fixture to
+        // be ready before exercising the unchanged 1500ms production deadline.
+        let ready = worker
+            .process
+            .lock()
+            .unwrap()
+            .output
+            .recv_timeout(Duration::from_secs(30))
+            .expect("test worker startup");
+        assert_eq!(ready, json!({"ready":true}));
+        worker
+    }
     #[test]
     fn descriptor_distinguishes_feature_only_from_input_and_unknown() {
         assert_eq!(
@@ -294,24 +310,20 @@ mod tests {
     }
     #[test]
     fn feature_only_worker_never_receives_interrupt_reads() {
-        let mut command = Command::new("powershell.exe");
-        command.args(["-NoProfile", "-NonInteractive", "-Command",
-            "$r=[Console]::ReadLine()|ConvertFrom-Json; if($r.op -eq 'set_feature'){[Console]::WriteLine('{\"ok\":true,\"result\":{\"length\":65}}')}else{[Console]::WriteLine('{\"ok\":false,\"error\":{\"code\":\"unexpected_read\",\"operation\":\"test\",\"message\":\"Feature-only collection has no Input\",\"retryable\":false}}')}"]);
-        let mut worker = NativeHid::spawn_command(command).unwrap();
+        // Deliberately exceed the I/O deadline during startup, as cold CI
+        // hosts can do. No command may be sent until the fixture is ready.
+        let mut worker = ready_worker(
+            "Start-Sleep -Seconds 2; [Console]::WriteLine('{\"ready\":true}'); $r=[Console]::ReadLine()|ConvertFrom-Json; if($r.op -eq 'set_feature'){[Console]::WriteLine('{\"ok\":true,\"result\":{\"length\":65}}')}else{[Console]::WriteLine('{\"ok\":false,\"error\":{\"code\":\"unexpected_read\",\"operation\":\"test\",\"message\":\"Feature-only collection has no Input\",\"retryable\":false}}')}",
+        );
         worker.input_reports = false;
         assert_eq!(worker.read_timeout(&mut [0; 1024], 10).unwrap(), 0);
         assert_eq!(worker.report("set_feature", &[0; 65]).unwrap(), 65);
     }
     #[test]
     fn hung_native_process_is_killed_and_cannot_receive_more_commands() {
-        let mut command = Command::new("powershell.exe");
-        command.args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "[Console]::ReadLine() | Out-Null; Start-Sleep -Seconds 30",
-        ]);
-        let worker = NativeHid::spawn_command(command).unwrap();
+        let worker = ready_worker(
+            "[Console]::WriteLine('{\"ready\":true}'); [Console]::ReadLine() | Out-Null; Start-Sleep -Seconds 30",
+        );
         let pid = worker.process.lock().unwrap().child.id();
         let start = std::time::Instant::now();
         assert_eq!(

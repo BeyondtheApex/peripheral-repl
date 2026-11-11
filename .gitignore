@@ -4,6 +4,7 @@
 !/.gitattributes
 !/Cargo.toml
 !/Cargo.lock
+!/rust-toolchain.toml
 !/LICENSE
 !/THIRD_PARTY_NOTICES.txt
 !/build.ps1
