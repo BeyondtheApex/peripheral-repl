@@ -7,6 +7,51 @@ use gpui_core::{
 use peripheral_repl::ui::Publication;
 use serde_json::json;
 
+#[test]
+fn cards_and_list_items_use_descending_preferences_after_filtering() {
+    let owners = [("a".into(), "A".into()), ("b".into(), "B".into())].into();
+    let mut publications = Vec::new();
+    for target in ["tray_card", "tray_list", "taskbar"] {
+        for (instance, id, preference, visible) in [
+            ("b", "normal", 0, true),
+            ("a", "normal", 0, true),
+            ("a", "first", 10, true),
+            ("a", "last", -10, true),
+            ("a", "hidden", 100, false),
+            ("unmanaged", "other", 100, true),
+        ] {
+            publications.push(Publication {
+                instance: instance.into(),
+                id: id.into(),
+                revision: 1,
+                generation: "test".into(),
+                resources: Default::default(),
+                surface: serde_json::from_value(json!({"target":target,"visible":visible,
+                    "position_preference":[-preference,preference],
+                    "root":{"id":"r","type":"text"}}))
+                .unwrap(),
+            });
+        }
+    }
+    for mode in [Mode::Grid, Mode::List] {
+        let options = Options {
+            mode,
+            ..Default::default()
+        };
+        for _ in 0..publications.len() {
+            publications.rotate_left(1);
+            let items = super::ordered_items(&publications, &owners, &options);
+            assert_eq!(
+                items
+                    .iter()
+                    .map(|p| format!("{}/{}", p.instance, p.id))
+                    .collect::<Vec<_>>(),
+                ["a/first", "a/normal", "b/normal", "a/last"]
+            );
+        }
+    }
+}
+
 #[gpui::test]
 fn incomplete_rows_keep_their_columns_when_the_grid_is_aligned(cx: &mut TestAppContext) {
     struct Fixture {

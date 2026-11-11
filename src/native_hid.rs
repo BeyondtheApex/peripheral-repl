@@ -25,6 +25,13 @@ impl Drop for Process {
 }
 pub struct NativeHid {
     process: Mutex<Process>,
+    input_reports: bool,
+}
+fn descriptor_has_input(bytes: &[u8]) -> Option<bool> {
+    let parsed = crate::hid_descriptor::parse(bytes).ok()?;
+    let reports = parsed["reports"].as_array()?;
+    // An empty or unsupported descriptor is unknown, not proof of no Input.
+    (!reports.is_empty()).then(|| reports.iter().any(|r| r["type"] == "input"))
 }
 impl NativeHid {
     fn spawn() -> Result<Self, Fault> {
@@ -85,6 +92,7 @@ impl NativeHid {
             }
         });
         let h = Self {
+            input_reports: true,
             process: Mutex::new(Process {
                 child,
                 input,
@@ -95,9 +103,13 @@ impl NativeHid {
         Ok(h)
     }
     pub fn open(path: &str) -> Result<Self, Fault> {
-        let h = Self::spawn()?;
-        h.call(json!({"op":"open","path":path}))?;
+        let mut h = Self::spawn()?;
+        let result = h.call(json!({"op":"open","path":path}))?;
+        h.input_reports = result["input_reports"].as_bool().unwrap_or(true);
         Ok(h)
+    }
+    pub fn has_input_reports(&self) -> bool {
+        self.input_reports
     }
     pub fn enumerate(filter: Option<&Value>) -> Result<Value, Fault> {
         Self::spawn()?.call(json!({"op":"enumerate","filter":filter}))
@@ -154,6 +166,12 @@ impl NativeHid {
         Ok(bytes.len())
     }
     pub fn read_timeout(&self, data: &mut [u8], timeout: i32) -> Result<usize, Fault> {
+        if !self.input_reports {
+            // Feature-only collections reject ReadFile on Windows. Keep their
+            // control channel alive without polling an absent Input endpoint.
+            std::thread::sleep(Duration::from_millis(timeout.clamp(1, 50) as u64));
+            return Ok(0);
+        }
         self.read("read_input", data, timeout)
     }
     pub fn get_input_report(&self, data: &mut [u8]) -> Result<usize, Fault> {
@@ -205,8 +223,14 @@ pub fn serve() -> anyhow::Result<()> {
                         .as_str()
                         .ok_or_else(|| anyhow::anyhow!("missing path"))?,
                 )?;
-                device = Some(hidapi::HidApi::new()?.open_path(&path)?);
-                return Ok(json!({}));
+                let handle = hidapi::HidApi::new()?.open_path(&path)?;
+                let mut descriptor = [0; 4096];
+                let input_reports = handle
+                    .get_report_descriptor(&mut descriptor)
+                    .ok()
+                    .and_then(|n| descriptor_has_input(&descriptor[..n]));
+                device = Some(handle);
+                return Ok(json!({"input_reports":input_reports}));
             }
             let h = device.as_ref().ok_or_else(|| anyhow::anyhow!("not open"))?;
             let mut bytes = unhex(request["wire"].as_str().unwrap_or(""))?;
@@ -230,6 +254,10 @@ pub fn serve() -> anyhow::Result<()> {
                 }
                 _ => anyhow::bail!("unknown operation"),
             };
+            anyhow::ensure!(
+                n <= bytes.len(),
+                "native report length exceeds requested capacity"
+            );
             bytes.truncate(n);
             Ok(json!({"hex":hex(&bytes)}))
         })();
@@ -247,6 +275,33 @@ pub fn serve() -> anyhow::Result<()> {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    #[test]
+    fn descriptor_distinguishes_feature_only_from_input_and_unknown() {
+        assert_eq!(
+            descriptor_has_input(&unhex("06ffff0900a10109001500250175089540b102c0").unwrap()),
+            Some(false)
+        );
+        assert_eq!(
+            descriptor_has_input(
+                &unhex("0600ff090ea10185ba0901150026ff007508951f81000901150026ff007508951f9100c0")
+                    .unwrap()
+            ),
+            Some(true)
+        );
+        assert_eq!(descriptor_has_input(&[]), None);
+        assert_eq!(descriptor_has_input(&[0xfe]), None);
+        assert_eq!(descriptor_has_input(&[0xa1, 1, 0xc0]), None);
+    }
+    #[test]
+    fn feature_only_worker_never_receives_interrupt_reads() {
+        let mut command = Command::new("powershell.exe");
+        command.args(["-NoProfile", "-NonInteractive", "-Command",
+            "$r=[Console]::ReadLine()|ConvertFrom-Json; if($r.op -eq 'set_feature'){[Console]::WriteLine('{\"ok\":true,\"result\":{\"length\":65}}')}else{[Console]::WriteLine('{\"ok\":false,\"error\":{\"code\":\"unexpected_read\",\"operation\":\"test\",\"message\":\"Feature-only collection has no Input\",\"retryable\":false}}')}"]);
+        let mut worker = NativeHid::spawn_command(command).unwrap();
+        worker.input_reports = false;
+        assert_eq!(worker.read_timeout(&mut [0; 1024], 10).unwrap(), 0);
+        assert_eq!(worker.report("set_feature", &[0; 65]).unwrap(), 65);
+    }
     #[test]
     fn hung_native_process_is_killed_and_cannot_receive_more_commands() {
         let mut command = Command::new("powershell.exe");

@@ -74,7 +74,9 @@ fn refresh(endpoint: &Path) -> Result<Value> {
     let ping = request(endpoint, json!({"op":"ping"}))?;
     anyhow::ensure!(
         ping["ui_protocol"] == peripheral_ui_protocol::VERSION && ping["plugin_api"] == 2,
-        "This backend predates the declarative UI API. Stop or upgrade it, or connect to a separate compatible endpoint."
+        "UI/backend protocol mismatch (UI requires {}, backend reports {}). Restart both from the same application version, or connect to a compatible endpoint.",
+        peripheral_ui_protocol::VERSION,
+        ping["ui_protocol"]
     );
     let names = request(endpoint, json!({"op":"instances"}))?;
     let mut sessions = Vec::new();

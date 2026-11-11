@@ -69,6 +69,7 @@ impl Completer for ShellHelper {
             "config.get",
             "config.define",
             "ui.environment",
+            "ui.position",
             "ui.on_environment",
             "i18n.locale",
             "i18n.t",

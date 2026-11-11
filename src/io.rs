@@ -48,9 +48,17 @@ pub struct ChannelCore {
     policy: Arc<bindings::Policy>,
     generation: String,
     numbered: bool,
+    input_reports: bool,
 }
 impl ChannelCore {
     async fn control(&self, op: &str, wire: Vec<u8>) -> Result<Vec<u8>, Fault> {
+        if op == "get_input_report" && !self.input_reports {
+            return Err(Fault::new(
+                "unsupported",
+                op,
+                "HID collection has no Input reports",
+            ));
+        }
         if self.closed.load(Ordering::Acquire) {
             return Err(Fault::new("closed", op, "channel closed"));
         }
@@ -97,6 +105,13 @@ impl ChannelCore {
         }
     }
     fn subscribe(&self) -> Result<Arc<Queue>, Fault> {
+        if !self.input_reports {
+            return Err(Fault::new(
+                "unsupported",
+                "hid.subscribe",
+                "HID collection has no Input reports",
+            ));
+        }
         let mut observers = self.subscribers.lock().unwrap();
         observers.retain(|q| q.upgrade().is_some_and(|q| !q.is_closed()));
         if observers.len() >= 32 {
@@ -111,6 +126,13 @@ impl ChannelCore {
         Ok(queue)
     }
     async fn write(&self, wire: Vec<u8>) -> Result<usize, Fault> {
+        if wire.is_empty() || wire.len() > 1024 || (!self.numbered && wire[0] != 0) {
+            return Err(Fault::new(
+                "invalid_argument",
+                "hid.write",
+                "invalid report length or unnumbered report ID",
+            ));
+        }
         if self.closed.load(Ordering::Acquire) {
             return Err(Fault::new("closed", "hid.write", "channel closed"));
         }
@@ -130,6 +152,8 @@ impl ChannelCore {
             .map_err(|_| Fault::new("disconnected", "hid.write", "worker stopped"))?
     }
 }
+#[cfg(test)]
+mod tests;
 #[derive(Clone)]
 pub struct Channel {
     core: Arc<ChannelCore>,
@@ -228,7 +252,7 @@ fn packet(
 }
 impl UserData for Channel {
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
-        m.add_method("inspect",|lua,c,()|lua.to_value(&json!({"device":c.core.info,"closed":c.core.closed.load(Ordering::Acquire),"closing":!c.core.finished.load(Ordering::Acquire)&&c.core.closed.load(Ordering::Acquire),"generation":c.core.generation,"capabilities":{"read_input":true,"get_input_report":true,"write_output":"policy","get_feature":"policy","set_feature":"policy","send_output_report":"policy","transactions":true,"native_process_isolation":c.core.info["backend"]!="mock","subscriptions":true,"native_write_cancellation":false,"numbered_reports":c.core.numbered}})));
+        m.add_method("inspect",|lua,c,()|lua.to_value(&json!({"device":c.core.info,"closed":c.core.closed.load(Ordering::Acquire),"closing":!c.core.finished.load(Ordering::Acquire)&&c.core.closed.load(Ordering::Acquire),"generation":c.core.generation,"capabilities":{"read_input":c.core.input_reports,"get_input_report":c.core.input_reports,"write_output":"policy","get_feature":"policy","set_feature":"policy","send_output_report":"policy","transactions":true,"native_process_isolation":c.core.info["backend"]!="mock","subscriptions":c.core.input_reports,"native_write_cancellation":false,"numbered_reports":c.core.numbered}})));
         m.add_async_method(
             "transaction",
             |lua, c, (callback, timeout): (Function, Option<u64>)| async move {
@@ -323,11 +347,11 @@ impl UserData for Channel {
             "write_output",
             |_, c, (id, payload): (u8, AnyUserData)| async move {
                 let payload = payload.borrow::<Buffer>()?.bytes().to_vec();
-                if payload.len() > 1023 {
+                if payload.len() > 1023 || (!c.core.numbered && id != 0) {
                     return Err(Fault::new(
                         "invalid_argument",
                         "hid.write",
-                        "report exceeds 1024 bytes",
+                        "report exceeds 1024 bytes or unnumbered report has nonzero ID",
                     )
                     .lua());
                 }
@@ -365,15 +389,21 @@ impl UserData for Channel {
                     }
                     let _guard = c.lock().await?;
                     let mut bytes = c.core.control(name, wire).await.map_err(Fault::lua)?;
+                    let control_wire = Buffer::new(bytes.clone(), &c.budget)?;
+                    let report_id_matches = bytes[0] == id;
                     if !c.core.numbered {
                         bytes.remove(0);
                     }
-                    packet(
+                    let result = packet(
                         &lua,
                         json!({"wire_hex":bindings::hex(&bytes),"numbered":c.core.numbered}),
                         &c.budget,
                         length,
-                    )
+                    )?;
+                    result.set("requested_report_id", id)?;
+                    result.set("report_id_matches", report_id_matches)?;
+                    result.set("control_wire", control_wire)?;
+                    Ok(result)
                 },
             );
         }
@@ -399,6 +429,14 @@ impl UserData for Channel {
         m.add_async_method(
             "read_input",
             |lua, c, (length, timeout): (usize, u64)| async move {
+                if !c.core.input_reports {
+                    return Err(Fault::new(
+                        "unsupported",
+                        "hid.read",
+                        "HID collection has no Input reports",
+                    )
+                    .lua());
+                }
                 if !(1..=1024).contains(&length) || timeout > 120000 {
                     return Err(Fault::new(
                         "invalid_argument",
@@ -469,6 +507,7 @@ enum Backend {
     Mock {
         steps: VecDeque<Step>,
         pending: Vec<(Instant, Option<Vec<u8>>)>,
+        input_reports: bool,
         _allocation: crate::bindings::Charge,
     },
 }
@@ -476,6 +515,9 @@ fn worker(core: Arc<ChannelCore>, mut backend: Backend, rx: mpsc::Receiver<Comma
     let mut last_write = None::<Instant>;
     while !core.closed.load(Ordering::Acquire) {
         while let Ok(command) = rx.try_recv() {
+            if core.closed.load(Ordering::Acquire) {
+                break;
+            }
             match command {
                 Command::Control {
                     op,
@@ -592,7 +634,12 @@ fn worker(core: Arc<ChannelCore>, mut backend: Backend, rx: mpsc::Receiver<Comma
                     }
                     .and_then(|bytes| {
                         if read
-                            && (bytes.is_empty() || bytes.len() > wire.len() || bytes[0] != wire[0])
+                            && (bytes.is_empty()
+                                || bytes.len() > wire.len()
+                                // Some control Input replies (e.g. MT760) overwrite
+                                // byte zero with vendor status. Preserve the raw wire;
+                                // the protocol decoder validates the response header.
+                                || (op != "get_input_report" && bytes[0] != wire[0]))
                         {
                             return Err(Fault::new(
                                 "invalid_frame",
@@ -776,6 +823,10 @@ fn open_channel(
     backend: Backend,
     numbered: bool,
 ) -> mlua::Result<Channel> {
+    let input_reports = match &backend {
+        Backend::Hid { handle, .. } => handle.has_input_reports(),
+        Backend::Mock { input_reports, .. } => *input_reports,
+    };
     let (tx, rx) = mpsc::sync_channel(16);
     let core = Arc::new(ChannelCore {
         tx,
@@ -791,6 +842,7 @@ fn open_channel(
         policy: ctx.policy.clone(),
         generation: uuid::Uuid::new_v4().to_string(),
         numbered,
+        input_reports,
     });
     let channel = Channel {
         core: core.clone(),
@@ -902,6 +954,7 @@ pub fn install(lua: &Lua, ctx: &Context) -> mlua::Result<()> {
             policy: ctx.policy.clone(),
             generation: String::new(),
             numbered: true,
+            input_reports: true,
         }),
         budget: ctx.budget.clone(),
         transaction: None,
@@ -1048,9 +1101,10 @@ pub fn install(lua: &Lua, ctx: &Context) -> mlua::Result<()> {
     lua.load(
         r#"
         function device.reconnect(channel, reference)
-            local old=channel:inspect().device
+            local old=channel:inspect()
             channel:close()
-            return device.open(reference or device.resolve(old))
+            return device.open(reference or device.resolve(old.device),
+                {numbered_reports=old.capabilities.numbered_reports})
         end
     "#,
     )
@@ -1059,7 +1113,19 @@ pub fn install(lua: &Lua, ctx: &Context) -> mlua::Result<()> {
     let c = ctx.clone();
     mock.set(
         "replay",
-        lua.create_function(move |_, steps: Table| {
+        lua.create_function(move |_, (steps, opts): (Table, Option<Table>)| {
+            let numbered = opts
+                .as_ref()
+                .map(|o| o.get::<Option<bool>>("numbered_reports"))
+                .transpose()?
+                .flatten()
+                .unwrap_or(true);
+            let input_reports = opts
+                .as_ref()
+                .map(|o| o.get::<Option<bool>>("input_reports"))
+                .transpose()?
+                .flatten()
+                .unwrap_or(true);
             let mut queue = VecDeque::new();
             let mut size = 0;
             for step in steps.sequence_values::<Table>() {
@@ -1130,9 +1196,10 @@ pub fn install(lua: &Lua, ctx: &Context) -> mlua::Result<()> {
                 Backend::Mock {
                     steps: queue,
                     pending: vec![],
+                    input_reports,
                     _allocation: crate::bindings::Charge::new(c.budget.clone(), size)?,
                 },
-                true,
+                numbered,
             )
         })?,
     )?;

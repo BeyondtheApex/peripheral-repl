@@ -3,7 +3,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 mod motion;
 pub use motion::{Animation, AnimationKind, ScaleMode};
 mod images;
@@ -64,6 +64,9 @@ pub struct Surface {
     pub radius: Option<f32>,
     #[serde(default)]
     pub scale: ScaleMode,
+    /// Taskbar ascending, dashboard descending; ties use stable publication IDs.
+    #[serde(default)]
+    pub position_preference: [i32; 2],
     pub root: Node,
 }
 fn version() -> u32 {
@@ -192,7 +195,12 @@ impl Surface {
                 "only popups have a parent surface ID"
             );
         }
-        ensure!(self.version == VERSION, "unsupported UI protocol version");
+        // Legacy Lua documents remain valid; the host handshake uses VERSION
+        // so an older renderer cannot silently ignore the ordering extension.
+        ensure!(
+            matches!(self.version, 5 | VERSION),
+            "unsupported UI protocol version"
+        );
         ensure!(self.title.len() <= 160, "UI title too long");
         ensure!(
             self.x.is_some() == self.y.is_some(),
@@ -366,6 +374,37 @@ fn validate_node(node: &Node, depth: usize, ids: &mut BTreeSet<String>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn position_preferences_have_strict_shape_and_legacy_defaults() {
+        let base =
+            serde_json::json!({"version":5,"target":"taskbar","root":{"id":"r","type":"text"}});
+        let legacy: Surface = serde_json::from_value(base.clone()).unwrap();
+        legacy.validate().unwrap();
+        assert_eq!(legacy.position_preference, [0, 0]);
+        assert_eq!(
+            serde_json::to_value(&legacy).unwrap()["position_preference"],
+            serde_json::json!([0, 0])
+        );
+        for value in [
+            serde_json::json!([1]),
+            serde_json::json!([1, 2, 3]),
+            serde_json::json!([0.5, 0]),
+            serde_json::json!([2147483648_i64, 0]),
+            serde_json::json!(["1", 0]),
+            serde_json::Value::Null,
+        ] {
+            let mut description = base.clone();
+            description["position_preference"] = value;
+            assert!(serde_json::from_value::<Surface>(description).is_err());
+        }
+        let mut s = legacy;
+        s.position_preference = [i32::MIN, i32::MAX];
+        s.validate().unwrap();
+        assert_eq!(
+            serde_json::from_value::<Surface>(serde_json::to_value(&s).unwrap()).unwrap(),
+            s
+        );
+    }
     #[test]
     fn bounded_atomic_patches() {
         let mut s:Surface=serde_json::from_value(serde_json::json!({"target":"taskbar","root":{"id":"battery","type":"ring","value":42}})).unwrap();

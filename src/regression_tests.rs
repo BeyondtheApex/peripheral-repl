@@ -17,6 +17,31 @@ fn device(runtime: &Runtime) -> Value {
 const SAMPLE: &str = "device.register{id='one',name='Device'}; device.update{status='online',label='online',connected=true,battery_percent=73,values={battery=73},ttl_ms=100}";
 
 #[test]
+fn control_input_preserves_vendor_status_without_weakening_feature_checks() {
+    let root = tempfile::tempdir().unwrap();
+    let rt = Runtime::new(root.path()).unwrap();
+    rt.dispatch(json!({"op":"create"})).unwrap();
+    rt.dispatch(json!({"op":"eval","code":r#"
+        local c=mock.replay{{op='get_input_report',request='ba0000',response='010142'}}
+        local p=c:get_input_report(0xba,3)
+        assert(p.wire:hex()=='010142' and p.actual_length==3)
+        assert(p.requested_report_id==0xba)
+        c:close()
+        for _,case in ipairs{
+            {op='get_input_report',response=''},
+            {op='get_input_report',response='01014200'},
+            {op='get_feature',response='010142'},
+        } do
+            local d=mock.replay{{op=case.op,request='ba0000',response=case.response}}
+            local ok,e=pcall(function() return d[case.op](d,0xba,3) end)
+            assert(not ok and errors.info(e).code=='invalid_frame')
+            d:close()
+        end
+    "#}))
+        .unwrap();
+}
+
+#[test]
 fn language_refresh_preserves_sample_and_expiry() {
     let root = tempfile::tempdir().unwrap();
     let rt = Runtime::new(root.path()).unwrap();

@@ -122,12 +122,7 @@ impl Application {
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
-        let items = self
-            .publications
-            .iter()
-            .filter(|p| owners.contains_key(&p.instance) && matches(&self.dashboard_options, p))
-            .cloned()
-            .collect::<Vec<_>>();
+        let items = ordered_items(&self.publications, &owners, &self.dashboard_options);
         let options = self.dashboard_options.clone();
         let changed = {
             let view = surface.view.read(cx);

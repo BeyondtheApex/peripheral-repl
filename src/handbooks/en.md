@@ -1,6 +1,6 @@
 # Peripheral: plugin development and device debugging
 
-Updated 2026-11-09 · Rust host 0.3 · Lua 5.4 · Lua API 2 · plugin API 2 · UI protocol 5.
+Updated 2026-11-11 · Rust host 0.3 · Lua 5.4 · Lua API 2 · plugin API 2 · UI protocol 6.
 This handbook is a standalone handoff for humans and AI agents. Replace explicitly marked paths, identities and protocol placeholders. Example data is never evidence of a physical measurement.
 
 ## 1. Connect to the correct runtime
@@ -132,6 +132,8 @@ Enumerate first with `device.list{vendor_id=...,product_id=...}` or the `devices
 | device.parse_descriptor(buffer) | Bounded reports/fields parsing, not all vendor semantics |
 
 Validate actual length, report ID, command, sequence and known checksums. Packets contain wire/payload Buffers; read timeout differs from a valid packet. Control read lengths are capacity, not proof of actual reply size. Avoid stale input queues or confusing control and interrupt channels. Feature is implemented, not implicitly permitted.
+
+Feature-only HID collections are supported: when the descriptor proves there are no Input reports, the host skips interrupt polling and `inspect().capabilities.read_input`, `get_input_report` and `subscriptions` are false. Those Input APIs return `unsupported`; use policy-authorized `set_feature`/`get_feature` transactions and `device.watch` for presence. An unreadable or unsupported descriptor does not imply the absence of Input reports.
 
 Plugins declare exact privileged operations in `plugin.json.permissions`. Installation or first enable opens a host-owned permission page; the plugin card’s Permissions button lets users allow/revoke individual groups and inspect device/report parameters. Grants are stored separately in `.peripheral/permissions/<plugin-id>.json`; users do not hand-edit this file and plugin Lua cannot modify it. Missing required permissions prevents plugin execution (`awaiting_permission`). New or changed permission scopes require review again. Legacy plugins without permission declarations must update their manifest; they cannot borrow global grants.
 
@@ -349,3 +351,35 @@ The editor shows numeric ranges and validates every field before submitting. Err
 Node style.width/style.height specify fixed logical dimensions. The containing document still scales proportionally to its target; text with a fixed width truncates when necessary. Give quick-view icons, labels, bars and values fixed widths to keep columns aligned. AM .97’s combine option controls both quick-view rows and cards; the taskbar always has one dual-battery item. Separate mode restores two items, with battery-charging as the dock icon.
 
 `style.text_align` sets text alignment inside its declared width: `left` (default), `center`, or `right`. For centered card labels, declare both `width` and `text_align="center"`.
+
+## Position preferences
+
+Each surface optionally declares `position_preference={taskbar,overview}`, two signed 32-bit integers, both defaulting to zero. A larger first value puts a taskbar item later (to the right); a larger second value puts a quick-view item earlier (toward the top), in both card and list modes. Equal values sort by session ID, then surface ID (case-sensitive), never publication time, revision, title or generation. Managed plugin session IDs are stable. Changing the values reorders existing content without creating windows or new device samplers.
+
+```lua
+ui.publish('battery', {
+  target='taskbar', position_preference={10,20},
+  root={id='value',type='text',text='Example'}
+})
+ui.position('battery', -5, 30) -- change only this surface's ordering
+```
+
+Declare the pair on every relevant `taskbar`, `tray_card` or `tray_list` surface. Other targets ignore it; it is not an x/y coordinate or the OS ordering of independent tray icons. `ui.position` changes an existing, session-owned surface and returns its revision; identical values are a no-op. `ui.update` remains a node patch. Republishing without the preference resets it to zero; persist user choices with Lua configuration/storage and include them when publishing on startup. Protocol 6 rejects an incompatible GUI/backend pairing, while still accepting legacy version-5 Lua documents. Existing plugins do not require changes to retain their default order.
+
+## HID contracts, exceptions and offline validation
+
+The HID standard describes report types, IDs and descriptor lengths. Battery percentages, charging flags, receiver-versus-device presence, sleep and private command semantics are vendor protocols, not generic HID promises. A timeout cannot establish that a mouse is asleep; a receiver's presence cannot establish that its paired device is online.
+
+- HIDAPI control reads expect an ID byte (zero for unnumbered devices), and document that it remains in the response. The observed MT760 response differs: byte zero is vendor status. This is a captured-device exception, not a general Windows rule. Our pinned HIDAPI Windows implementation calls `DeviceIoControl(IOCTL_HID_GET_INPUT_REPORT)`, not `HidD_GetInputReport` directly. Keep the exception in protocol decoding; do not infer it for every device.
+- `get_input_report`/`get_feature` return `control_wire`, the complete bytes returned by HIDAPI, `requested_report_id`, and `report_id_matches`. `wire`/`payload` keep their existing normalization: with `numbered_reports=false`, the control API's leading dummy byte is omitted; with numbered reports, `payload` omits byte zero. Use `control_wire` when inspecting a nonstandard header. Empty/oversized control replies fail; Feature IDs remain strict. Never parse padded capacity as valid battery data without checking the protocol fields and actual length.
+- `device.open(ref,{numbered_reports=false})` is required for unnumbered reports; the compatibility default remains true. Confirm the format with `descriptor()`/`device.parse_descriptor`. The control buffer length always includes the ID/dummy byte. All output APIs require ID zero in unnumbered mode. `device.reconnect` retains the old channel's framing option; discard old subscriptions and use the returned channel.
+- Microsoft recommends interrupt reads for continuous reports and warns that some devices can become unresponsive to control Input requests. Read-only permissions are not a guarantee of harmless hardware behavior. Use only verified control queries; do not probe report IDs or seed bytes blindly. Host deadlines bound worker lifetime, not firmware behavior, and cannot roll back a report already transmitted.
+- `mock.replay(steps,{numbered_reports=false,input_reports=false})` models unnumbered Feature-only collections. Both flags default true for old fixtures. Mock control responses include the ID/dummy byte; unnumbered interrupt responses do not. Mocks use explicit replay steps, do not access hardware, and do not simulate every OS driver behavior, permission grant or real transport timing.
+
+The tracked offline suite covers framing, raw control responses, Feature ID checks, unsupported Input, reconnect options, short buffers, timeout/no response, delayed replies, disconnect/queued-command cancellation, signed UI ordering and stale-click rejection. CI runs those tests, protocol validation, UI layout tests and core Clippy before packaging. Add captured good/bad frames for each new plugin and repeat plug/unplug, sleep/wake and charging tests when that hardware is available. Passing offline tests is not a claim of universal device compatibility.
+
+Primary references checked 2026-11-11:
+- Microsoft: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/hidsdi/nf-hidsdi-hidd_getinputreport
+- Microsoft: https://learn.microsoft.com/en-us/windows-hardware/drivers/hid/obtaining-hid-reports
+- HIDAPI API contract: https://libusb.info/hidapi/group__API.html
+- Pinned Windows implementation: `hidapi` 2.6.7, `etc/hidapi/windows/hid.c`, `hid_get_report`/`hid_get_input_report` (included in the Cargo dependency source).

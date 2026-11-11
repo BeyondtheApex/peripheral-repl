@@ -269,3 +269,17 @@ pub fn matches(options: &Options, p: &Publication) -> bool {
                 Target::TrayCard
             }
 }
+
+fn ordered_items(
+    publications: &[Publication],
+    owners: &BTreeMap<String, String>,
+    options: &Options,
+) -> Vec<Publication> {
+    let mut items = publications
+        .iter()
+        .filter(|p| owners.contains_key(&p.instance) && matches(options, p))
+        .cloned()
+        .collect::<Vec<_>>();
+    peripheral_repl::ui::order::overview(&mut items);
+    items
+}

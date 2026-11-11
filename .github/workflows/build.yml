@@ -12,7 +12,16 @@ jobs:
         run: rustup update stable
       - name: Offline runtime regression tests
         shell: pwsh
-        run: cargo test --locked --lib
+        run: |
+          cargo test --locked --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path crates/ui-protocol/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Offline UI layout tests
+        shell: pwsh
+        run: cargo test --locked --manifest-path ui/Cargo.toml --bin peripheral-ui
       - name: Build application and native adapter
         shell: pwsh
         run: ./build.ps1 -Release

@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 mod events;
+pub mod order;
+#[cfg(test)]
+mod tests;
 pub use events::{dismiss, event_request};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -173,6 +176,30 @@ pub fn install(lua: &Lua, ctx: &Context) -> mlua::Result<()> {
             surface.patch(&to_ui_json(value)?).map_err(error)?;
             publish(&c, &id, surface)
         })?,
+    )?;
+    let c = ctx.clone();
+    ui.set(
+        "position",
+        lua.create_function(
+            move |_, (id, taskbar, overview): (String, LuaValue, LuaValue)| {
+                let preference: [i32; 2] =
+                    serde_json::from_value(json!([to_ui_json(taskbar)?, to_ui_json(overview)?]))
+                        .map_err(error)?;
+                let key = format!("{}/{}", c.name, id);
+                let mut surface = c
+                    .shared
+                    .ui
+                    .lock()
+                    .unwrap()
+                    .surfaces
+                    .get(&key)
+                    .ok_or_else(|| error("surface not published"))?
+                    .surface
+                    .clone();
+                surface.position_preference = preference;
+                publish(&c, &id, surface)
+            },
+        )?,
     )?;
     let c = ctx.clone();
     ui.set(

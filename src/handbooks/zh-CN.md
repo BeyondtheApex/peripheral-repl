@@ -1,6 +1,6 @@
 # Peripheral：插件开发与设备调试手册
 
-版本：2026-11-09 · Rust 宿主 0.3 · Lua 5.4 · Lua API 2 · 插件 API 2 · UI 协议 5。
+版本：2026-11-11 · Rust 宿主 0.3 · Lua 5.4 · Lua API 2 · 插件 API 2 · UI 协议 6。
 本文是可单独发送给人类或 AI 的操作手册。代码块中标明占位符的路径、身份和协议必须替换；不要把示例值当成真实设备数据。
 
 ## 1. 先建立正确连接
@@ -134,6 +134,8 @@ schema 支持 type/properties/required/additionalProperties/items/minimum/maximu
 | `device.parse_descriptor(buffer)` | 有界解析 reports/fields；不解释所有厂商字段 |
 
 packet 包含 wire/payload 等字段，检查长度、报告 ID、命令、序号及已知校验。`get_input_report`/Feature 使用容量长度，检查实际返回，避免截断/陈旧队列混淆。普通 Output/Feature 默认拒绝；Feature 并未缺失。
+
+支持只有 Feature Report 的 HID 集合：描述符确认没有 Input 报告时，后台跳过普通输入轮询，`inspect().capabilities` 中的 `read_input`、`get_input_report`、`subscriptions` 为 false；调用这些输入接口会返回 `unsupported`。请使用已授权的 `set_feature`/`get_feature` 事务，并通过 `device.watch` 检测插拔。描述符读取或解析失败不等于没有 Input 报告。
 
 插件在 `plugin.json.permissions` 中声明所需的精确设备操作，安装或首次启用时由宿主显示授权页。用户从插件卡片的“权限”进入，可逐项允许、撤销并查看设备和报文参数。授权分别保存在工作目录 `.peripheral/permissions/<plugin-id>.json`，无需手写此文件；插件 Lua 无权改写授权。必需权限未允许时插件不执行设备代码，状态为 `awaiting_permission`。新增或变更权限需要再次确认。旧版未声明权限的插件需要更新清单，不能借用全局策略。
 
@@ -350,3 +352,35 @@ config.define({type='object',additionalProperties=false,properties={
 节点 style.width/style.height 是固定的逻辑尺寸，整个文档仍按承载目标保持比例缩放；带固定宽度的文本超长时省略。速览行可给图标、名称、进度条和数值分别固定宽度，避免文本长度改变列的位置。AM .97 插件的合并选项控制速览项目及卡片，任务栏仍只有一个双电池项目。关闭合并选项恢复两个项目，底座使用 battery-charging 图标。
 
 `style.text_align` 指定文字在声明宽度内的对齐方式：`left`（默认）、`center`、`right`。卡片文字居中时同时声明 `width` 和 `text_align="center"`。
+
+## 渲染位置偏好
+
+每个表面可声明 `position_preference={任务栏,速览}`，两个有符号 32 位整数，默认都是 0。第一个越大，任务栏项目越靠后（右）；第二个越大，速览项目越靠前（上），卡片和列表使用同一规则。相同偏好按会话 ID、表面 ID 稳定排序（区分大小写），与发布时机、修订号、标题和运行代次无关；插件的托管会话 ID 固定。修改偏好只重排已有内容，不创建新窗口或设备采样任务。
+
+```lua
+ui.publish('battery', {
+  target='taskbar', position_preference={10,20},
+  root={id='value',type='text',text='示例'}
+})
+ui.position('battery', -5, 30) -- 只修改这个表面的排序
+```
+
+在对应的每个 `taskbar`、`tray_card`、`tray_list` 表面上声明这两个值。其他目标忽略它；它不是 x/y 坐标，也不控制 Windows 独立托盘图标的顺序。`ui.position` 只修改当前会话已经发布的表面，返回修订号；数值不变时不产生新修订。`ui.update` 仍只修改节点。重新 publish 时不填该字段会恢复为零；持久化用户选择应由 Lua 配置或 storage 保存，启动发布时再次传入。UI 协议升为 6，防止新旧 GUI/后台混用；旧的 version=5 Lua 描述仍可使用。现有插件不改脚本也保留默认顺序。
+
+## HID 契约、例外与离线验证
+
+HID 标准定义报告类型、ID、描述符长度；电量百分比、充电标志、接收器与本体的关系、休眠和私有命令属于厂商协议，不是通用 HID 保证。超时不能直接证明鼠标休眠，接收器存在也不能证明本体在线。
+
+- HIDAPI 的控制读契约要求 ID 字节（无编号时为零），文档说明回包保留该字节。实测 MT760 的回包不同，首字节是厂商状态；这是有捕获证据的设备例外，不是 Windows 的普遍规则。本项目锁定的 HIDAPI Windows 实现实际调用 `DeviceIoControl(IOCTL_HID_GET_INPUT_REPORT)`，并不是直接调用 `HidD_GetInputReport`。例外应留在该协议的解码中，不推广到其他设备。
+- `get_input_report`/`get_feature` 返回 `control_wire`（HIDAPI 返回的完整字节）、`requested_report_id`、`report_id_matches`。已有 `wire`/`payload` 规则不变：`numbered_reports=false` 时去掉控制接口的首个占位字节；有编号时 `payload` 去掉首字节。查看非标准头部请使用 `control_wire`。空包、超容量控制回包仍报错，Feature 的 ID 校验保持严格。不要把缓冲容量或填充字节当成有效电量，必须校验实际长度和协议字段。
+- 无编号设备使用 `device.open(ref,{numbered_reports=false})`；兼容性默认值仍为 true。通过 `descriptor()`/`device.parse_descriptor` 确认报文格式，控制缓冲长度始终包含 ID/占位字节。无编号模式的所有输出接口要求 ID 为零。`device.reconnect` 保留旧通道的报文格式；重连后使用新通道，废弃旧订阅。
+- 微软建议连续输入使用中断读取，并明确提醒部分设备可能不响应控制 Input 请求甚至因此失去响应。只读权限不等于硬件操作绝对无副作用。只用经过验证的控制查询，不遍历未知报告 ID 或 seed 字节。宿主超时约束子进程寿命，不约束固件行为，也不能撤销已经发送的报告。
+- `mock.replay(steps,{numbered_reports=false,input_reports=false})` 可模拟无编号、只有 Feature 的集合。两个选项默认 true，兼容旧回放。mock 控制回复包含 ID/占位字节，无编号中断回复不包含它。mock 只消费明确的步骤，不接触硬件，也不模拟所有系统驱动、授权策略及真实传输时序。
+
+仓库内的离线测试覆盖：报文格式、原始控制回复、Feature ID 校验、不支持 Input、重连参数、小缓冲、超时/无响应、迟到回复、断开后排队命令取消、正负 UI 排序及过期点击拒绝。CI 在打包前运行这些测试、协议校验、UI 布局测试和核心 Clippy。每适配新设备，把实际好/坏回包加入测试；有硬件时再补插拔、睡眠唤醒、充电变化验证。离线通过不能代表全部设备兼容。
+
+2026-11-11 核对的一手依据：
+- 微软： https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/hidsdi/nf-hidsdi-hidd_getinputreport
+- 微软： https://learn.microsoft.com/en-us/windows-hardware/drivers/hid/obtaining-hid-reports
+- HIDAPI API 契约： https://libusb.info/hidapi/group__API.html
+- 锁定版本实现：`hidapi` 2.6.7 的 `etc/hidapi/windows/hid.c`，`hid_get_report`/`hid_get_input_report`（Cargo 依赖源码内）。

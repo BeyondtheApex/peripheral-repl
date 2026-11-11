@@ -100,7 +100,10 @@ impl Application {
             depth
         });
         let mut errors = Vec::new();
-        for (id, (kind, items)) in desired {
+        for (id, (kind, mut items)) in desired {
+            if kind == SurfaceKind::Taskbar {
+                peripheral_repl::ui::order::taskbar(&mut items);
+            }
             if let Err(error) = self.reconcile_surface(&id, kind, items, cx) {
                 errors.push(format!("{id}: {error:#}"));
             }

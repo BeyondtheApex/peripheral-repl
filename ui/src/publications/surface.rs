@@ -30,7 +30,10 @@ impl Application {
             let old = &s.view.read(cx).publications;
             old.len() == items.len()
                 && old.iter().zip(&items).all(|(a, b)| {
-                    a.revision == b.revision && a.generation == b.generation && a.id == b.id
+                    a.revision == b.revision
+                        && a.generation == b.generation
+                        && a.instance == b.instance
+                        && a.id == b.id
                 })
         };
         if !unchanged {
