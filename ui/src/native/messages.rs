@@ -12,6 +12,9 @@ pub(super) unsafe extern "system" fn proc(
     // Never unwind through Explorer/Win32 callback boundaries.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let h = unsafe { &*(data as *const Hook) };
+        if h.id == "main" && (msg == WM_DISPLAYCHANGE || msg == WM_SETTINGCHANGE) {
+            enqueue(h, json!({"op":"taskbar_display_changed"}));
+        }
         if h.id == "main" && (msg == WM_SETTINGCHANGE || msg == WM_THEMECHANGED) {
             enqueue(h, json!({"op":"appearance_system_changed"}));
         }
@@ -66,6 +69,9 @@ pub(super) unsafe extern "system" fn proc(
             }
         }
         if msg == WM_NCDESTROY {
+            unsafe {
+                let _ = KillTimer(Some(hwnd), tray::RETRY_TIMER);
+            }
             gpui_windows::backdrop::forget(hwnd.0 as usize);
             popup::unregister(hwnd.0 as usize);
             for (id, icon) in h.tray.borrow().iter() {
@@ -80,15 +86,13 @@ pub(super) unsafe extern "system" fn proc(
             }
             return None;
         }
-        if msg == h.taskbar_created {
-            for (id, icon) in h.tray.borrow().iter() {
-                let mut d = tray_data(hwnd, *id, *icon);
-                unsafe {
-                    let _ = Shell_NotifyIconW(NIM_ADD, &d);
-                    d.Anonymous.uVersion = NOTIFYICON_VERSION_4;
-                    let _ = Shell_NotifyIconW(NIM_SETVERSION, &d);
-                }
-            }
+        if h.taskbar_created != 0 && msg == h.taskbar_created {
+            h.tray_retry_attempts.set(0);
+            tray::sync(hwnd, h);
+        }
+        if msg == WM_TIMER && w.0 == tray::RETRY_TIMER {
+            tray::sync(hwnd, h);
+            return Some(LRESULT(0));
         }
         if h.popup.get() && msg == WM_ACTIVATE && (w.0 & 0xffff) == WA_INACTIVE as usize {
             enqueue(h, json!({"op":"hide","surface":h.id}));

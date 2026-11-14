@@ -5,6 +5,10 @@
 #include <atomic>
 #include <mutex>
 #include "taskbar_trace.h"
+#include "taskbar_placement.h"
+#include "taskbar_monitor.h"
+#include "taskbar_candidates.h"
+#include "taskbar_roots.h"
 
 namespace core=winrt::Windows::UI::Core;
 constexpr GUID TapId={0x479be21b,0x8374,0x4cec,{0x8b,0x63,0xa8,0x0b,0x16,0x3d,0x29,0x92}};
@@ -12,20 +16,25 @@ HMODULE module_handle{};
 std::atomic<bool> attached{false};
 std::atomic<bool> stopped{false};
 std::unique_ptr<Host> bridge;
-controls::Grid parent{nullptr};
+std::unique_ptr<TaskbarPlacement> placement;
 xaml::DispatcherTimer watchdog{nullptr};
 std::filesystem::path session_path;
 HANDLE producer_process{};
 HANDLE stop_event{};
-bool inserted_column=false;
-uint32_t column_index{};
-winrt::weak_ref<xaml::FrameworkElement> tray_anchor;
+TaskbarCandidates candidates;
+TaskbarRoots taskbar_roots;
+std::mutex owner_mutex;
+core::CoreDispatcher owner_dispatcher{nullptr};
+uint64_t requested_generation{};
 HWND control_window{};
 std::mutex trace_mutex;
 std::filesystem::path trace_directory;
-std::filesystem::path module_directory(){wchar_t path[32768]{};GetModuleFileNameW(module_handle,path,32768);return std::filesystem::path(path).parent_path();}
 void trace(char const* stage,HRESULT hr=S_OK) noexcept {try{std::lock_guard lock(trace_mutex);if(!trace_directory.empty())taskbar_trace(trace_directory,stage,hr);}catch(...){}}
-void select_config(std::filesystem::path const& config){session_path=config;std::lock_guard lock(trace_mutex);trace_directory=config.parent_path();}
+std::filesystem::path current_config(){std::lock_guard lock(owner_mutex);return session_path;}
+void select_config(std::filesystem::path const& config){
+    {std::lock_guard lock(owner_mutex);session_path=config;}
+    std::lock_guard lock(trace_mutex);trace_directory=config.parent_path();
+}
 json::JsonObject read_config(std::filesystem::path const& path){
     if(std::filesystem::file_size(path)>16384)throw winrt::hresult_invalid_argument();
     std::ifstream in(path,std::ios::binary);std::stringstream data;data<<in.rdbuf();
@@ -53,33 +62,68 @@ LRESULT CALLBACK ControlProc(HWND,UINT,WPARAM,LPARAM);
 
 void detach() noexcept {
     trace("detach");
-    stopped=true;attached=false;
+    stopped=true;
     try{
         if(watchdog){watchdog.Stop();watchdog=nullptr;}
-        if(parent&&bridge&&bridge->panel){
-            uint32_t index{};if(parent.Children().IndexOf(bridge->panel,index))parent.Children().RemoveAt(index);
-            if(inserted_column&&column_index<parent.ColumnDefinitions().Size()){
-                parent.ColumnDefinitions().RemoveAt(column_index);
-                for(auto child:parent.Children()){if(auto element=child.try_as<xaml::FrameworkElement>()){
-                    auto col=controls::Grid::GetColumn(element);if(col>static_cast<int>(column_index))controls::Grid::SetColumn(element,col-1);
-                }}
-            }
-        }
+        placement.reset();
         if(bridge){if(bridge->hwnd)DestroyWindow(bridge->hwnd);bridge.reset();}
-        parent=nullptr;
-        inserted_column=false;
         if(producer_process){CloseHandle(producer_process);producer_process=nullptr;}
         if(stop_event){CloseHandle(stop_event);stop_event=nullptr;}
     }catch(...){}
+    attached=false;
+}
+
+HWND primary_taskbar(xaml::FrameworkElement const& anchor) noexcept {
+    try {
+        if(!anchor.Dispatcher().HasThreadAccess()||!anchor.XamlRoot())return nullptr;
+        auto target=taskbar_roots.match(anchor);
+        return peripheral::taskbar::primary_window(target.bar)?target.bar:nullptr;
+    }catch(...){return nullptr;}
+}
+
+bool anchor_ready(xaml::FrameworkElement const& tray) noexcept {
+    try {
+        auto node=tray.Parent();
+        for(int i=0;node&&i<24;++i){
+            if(auto grid=node.try_as<controls::Grid>();grid&&grid.ActualWidth()>tray.ActualWidth()
+                &&grid.ActualHeight()>0&&grid.ActualHeight()<=160)return true;
+            node=xaml::Media::VisualTreeHelper::GetParent(node);
+        }
+    }catch(...){}
+    return false;
 }
 
 void attach(xaml::FrameworkElement const& tray) noexcept {
-    trace("attach_enter");
-    if(stopped||attached.exchange(true))return;
+    if(stopped||attached)return;
+    auto target=primary_taskbar(tray);
+    // Diagnostics are rate-limited per candidate thread, not on every timer tick.
+    static thread_local std::filesystem::path checked_config;
+    static thread_local int last_selection=-1;
+    auto config_path=current_config();
+    auto native=taskbar_roots.match(tray);
+    int selection=!native.bar?0:!target?1:!anchor_ready(tray)?2:3;
+    if(config_path!=checked_config||selection!=last_selection){
+        checked_config=config_path;last_selection=selection;
+        trace(native.exact?"target_resolved_from_xaml_source":"target_thread_fallback");
+        trace(selection==0?"primary_target_ambiguous_or_missing":selection==1?"secondary_target_skipped":selection==2?"primary_layout_not_ready":"primary_target_ready");
+    }
+    // An early visual-tree callback can precede measure/arrange. Wait for a later
+    // candidate tick instead of marking the entire adapter stopped permanently.
+    if(selection!=3)return;
     try{
-        auto grid=tray.Parent().try_as<controls::Grid>();
-        if(!grid)throw winrt::hresult_error(E_FAIL,L"unsupported taskbar parent");
-        auto config=read_config(session_path);
+        {
+            std::lock_guard lock(owner_mutex);
+            if(stopped||attached)return;
+            attached=true;
+            owner_dispatcher=tray.Dispatcher();
+        }
+        trace("primary_anchor_selected");
+        if(!control_window){
+            WNDCLASSW wc{};wc.lpfnWndProc=ControlProc;wc.hInstance=module_handle;wc.lpszClassName=L"PeripheralTaskbarControl_v2";RegisterClassW(&wc);
+            control_window=CreateWindowExW(0,wc.lpszClassName,L"",0,0,0,0,0,HWND_MESSAGE,nullptr,module_handle,nullptr);
+            if(!control_window)winrt::throw_last_error();
+        }
+        auto config=read_config(current_config());
         if(config.GetNamedNumber(L"explorer_pid")!=GetCurrentProcessId())throw winrt::hresult_error(E_FAIL,L"Explorer generation changed");
         auto pid=static_cast<DWORD>(config.GetNamedNumber(L"producer_pid"));
         producer_process=OpenProcess(SYNCHRONIZE,FALSE,pid);
@@ -93,31 +137,14 @@ void attach(xaml::FrameworkElement const& tray) noexcept {
         WNDCLASSW wc{};wc.lpfnWndProc=WindowProc;wc.hInstance=module_handle;wc.lpszClassName=L"PeripheralTaskbarBridge_v2";RegisterClassW(&wc);
         bridge->hwnd=CreateWindowExW(0,wc.lpszClassName,L"",0,0,0,0,0,HWND_MESSAGE,nullptr,module_handle,bridge.get());
         if(!bridge->hwnd)winrt::throw_last_error();
-        parent=grid;
-        auto columns=grid.ColumnDefinitions();auto children=grid.Children();
-        uint32_t index{};if(!children.IndexOf(tray,index))throw winrt::hresult_error(E_FAIL,L"taskbar anchor missing");
-        // Refuse unexpected layouts before changing any Explorer-owned properties.
-        for(auto child:children){if(auto element=child.try_as<xaml::FrameworkElement>()){
-            if(element.Name()==L"PeripheralTaskbarSurface")throw winrt::hresult_error(E_FAIL,L"taskbar surface already present");
-            if(columns.Size()>0&&controls::Grid::GetColumnSpan(element)!=1)throw winrt::hresult_error(E_FAIL,L"unsupported spanning taskbar layout");
-        }}
-        if(columns.Size()>0){
-            int target=controls::Grid::GetColumn(tray);if(target<0||target>static_cast<int>(columns.Size()))throw winrt::hresult_error(E_FAIL,L"unsupported column layout");
-            column_index=target; xaml::Controls::ColumnDefinition column;column.Width(xaml::GridLengthHelper::Auto());columns.InsertAt(column_index,column);inserted_column=true;
-            for(auto child:children){if(auto element=child.try_as<xaml::FrameworkElement>()){int col=controls::Grid::GetColumn(element);if(col>=target)controls::Grid::SetColumn(element,col+1);}}
-            controls::Grid::SetColumn(bridge->panel,target);
-        }else{
-            auto reserve=tray.ActualWidth();if(reserve<=0||reserve>grid.ActualWidth()-240)throw winrt::hresult_error(E_FAIL,L"taskbar size unavailable");
-            bridge->panel.HorizontalAlignment(xaml::HorizontalAlignment::Right);
-            bridge->panel.Margin(xaml::ThicknessHelper::FromLengths(0,0,reserve+12,0));
-        }
-        controls::Grid::SetRow(bridge->panel,controls::Grid::GetRow(tray));
-        controls::Canvas::SetZIndex(bridge->panel,10000);
-        children.InsertAt(index,bridge->panel);bridge->report();trace("panel_attached");
-        watchdog=xaml::DispatcherTimer();watchdog.Interval(std::chrono::seconds(1));
+        auto anchor=winrt::make_weak(tray);
+        placement=std::make_unique<TaskbarPlacement>(*bridge,tray,config.GetNamedString(L"side",L"right")==L"left",TaskbarPlacement::centered,
+            [anchor,target]{auto tray=anchor.get();return tray&&primary_taskbar(tray)==target;});
+        bridge->report();trace("panel_attached");
+        watchdog=xaml::DispatcherTimer();watchdog.Interval(std::chrono::milliseconds(250));
         watchdog.Tick([](auto const&,auto const&){
             if(WaitForSingleObject(producer_process,0)!=WAIT_TIMEOUT||WaitForSingleObject(stop_event,0)==WAIT_OBJECT_0){detach();return;}
-            if(!inserted_column&&bridge){if(auto tray=tray_anchor.get()){auto reserve=tray.ActualWidth();if(reserve>0)bridge->panel.Margin(xaml::ThicknessHelper::FromLengths(0,0,reserve+12,0));}}
+            if(placement)placement->refresh();
         });watchdog.Start();
     }catch(winrt::hresult_error const& e){trace("attach_error",e.code());if(bridge){bridge->error=winrt::to_string(e.message());bridge->report();}detach();}
     catch(...){trace("attach_exception",E_FAIL);detach();}
@@ -126,24 +153,25 @@ void attach(xaml::FrameworkElement const& tray) noexcept {
 struct Watcher:winrt::implements<Watcher,IVisualTreeServiceCallback2,winrt::non_agile>{
     winrt::com_ptr<IXamlDiagnostics> diagnostics;
     explicit Watcher(winrt::com_ptr<IUnknown> const& site):diagnostics(site.as<IXamlDiagnostics>()){}
-    HRESULT STDMETHODCALLTYPE OnVisualTreeChange(ParentChildRelation,VisualElement element,VisualMutationType mutation) noexcept override{
+    HRESULT STDMETHODCALLTYPE OnVisualTreeChange(ParentChildRelation relation,VisualElement element,VisualMutationType mutation) noexcept override{
         static std::atomic<bool> first{true};if(first.exchange(false))trace("tree_callback");
-        if(stopped||attached||mutation!=Add||!element.Type||wcscmp(element.Type,L"SystemTray.SystemTrayFrame"))return S_OK;
+        if(mutation==Remove){candidates.remove(element.Handle);taskbar_roots.remove(element.Handle);return S_OK;}
+        if(mutation==Add&&element.Type&&(!relation.Parent||wcsstr(element.Type,L"DesktopWindowXamlSource"))){
+            try{
+                winrt::Windows::Foundation::IInspectable object;
+                winrt::check_hresult(diagnostics->GetIInspectableFromHandle(element.Handle,reinterpret_cast<::IInspectable**>(winrt::put_abi(object))));
+                if(auto source=object.try_as<hosting::DesktopWindowXamlSource>()){
+                    taskbar_roots.add(element.Handle,source);trace("xaml_source_registered");
+                }
+            }catch(...){trace("xaml_source_resolution_failed",winrt::to_hresult());}
+        }
+        if(mutation!=Add||!element.Type||wcscmp(element.Type,L"SystemTray.SystemTrayFrame"))return S_OK;
         trace("tray_anchor_found");
         try{winrt::Windows::Foundation::IInspectable object;
             winrt::check_hresult(diagnostics->GetIInspectableFromHandle(element.Handle,reinterpret_cast<::IInspectable**>(winrt::put_abi(object))));
-            if(auto tray=object.try_as<xaml::FrameworkElement>()){
-                tray_anchor=winrt::make_weak(tray);
-                // Own the reattach control window on this XAML thread. Do not
-                // resolve FrameworkElement weak references from a worker apartment.
-                if(!control_window){
-                    WNDCLASSW wc{};wc.lpfnWndProc=ControlProc;wc.hInstance=module_handle;wc.lpszClassName=L"PeripheralTaskbarControl_v2";RegisterClassW(&wc);
-                    control_window=CreateWindowExW(0,wc.lpszClassName,L"",0,0,0,0,0,HWND_MESSAGE,nullptr,module_handle,nullptr);
-                    trace("control_window_ready",control_window?S_OK:HRESULT_FROM_WIN32(GetLastError()));
-                }
-                tray.Dispatcher().RunAsync(core::CoreDispatcherPriority::Normal,[tray]{attach(tray);});
-            }
-        }catch(...){}return S_OK;
+            if(auto tray=object.try_as<xaml::FrameworkElement>())candidates.add(element.Handle,tray,attach,trace);
+            else trace("tray_anchor_type_unavailable",E_NOINTERFACE);
+        }catch(...){trace("tray_anchor_resolution_failed",winrt::to_hresult());}return S_OK;
     }
     HRESULT STDMETHODCALLTYPE OnElementStateChanged(InstanceHandle,VisualElementState,LPCWSTR) noexcept override{return S_OK;}
 };
@@ -152,7 +180,7 @@ struct Tap:winrt::implements<Tap,IObjectWithSite,winrt::non_agile>{
     winrt::com_ptr<IUnknown> site;
     HRESULT STDMETHODCALLTYPE SetSite(IUnknown* value) noexcept override{
         trace("set_site");
-        try{if(session_path.empty())bootstrap_config();
+        try{if(current_config().empty())bootstrap_config();
             if(watcher){winrt::check_hresult(watcher->diagnostics.as<IVisualTreeService3>()->UnadviseVisualTreeChange(watcher.get()));watcher=nullptr;}
             site.copy_from(value);if(site){
             watcher=winrt::make_self<Watcher>(site);
@@ -174,6 +202,24 @@ struct Factory:winrt::implements<Factory,IClassFactory>{
 };
 extern "C" __declspec(dllexport) HRESULT __stdcall DllGetClassObject(REFCLSID clsid,REFIID iid,void** out){trace("get_class_object");if(clsid!=TapId)return CLASS_E_CLASSNOTAVAILABLE;try{return winrt::make<Factory>().as(iid,out);}catch(...){return winrt::to_hresult();}}
 extern "C" __declspec(dllexport) HRESULT __stdcall DllCanUnloadNow(){return S_FALSE;}
+void schedule_reattach(std::filesystem::path config,uint64_t generation){
+    core::CoreDispatcher dispatcher{nullptr};
+    {std::lock_guard lock(owner_mutex);dispatcher=owner_dispatcher;}
+    if(!dispatcher)throw winrt::hresult_error(E_FAIL,L"taskbar dispatcher unavailable");
+    dispatcher.RunAsync(core::CoreDispatcherPriority::Normal,[config,generation]{
+        try{
+            bool moved=false;
+            {
+                std::lock_guard lock(owner_mutex);
+                if(generation!=requested_generation)return;
+                moved=!owner_dispatcher.HasThreadAccess();
+                if(!moved)stopped=true; // Prevent another thread claiming ownership during teardown.
+            }
+            if(moved){schedule_reattach(config,generation);return;}
+            detach();select_config(config);stopped=false;trace("reattach_dispatch");
+        }catch(...){trace("reattach_dispatch_error",winrt::to_hresult());}
+    });
+}
 LRESULT CALLBACK ControlProc(HWND hwnd,UINT message,WPARAM w,LPARAM l){
     if(message==WM_COPYDATA){
         try{
@@ -184,14 +230,11 @@ LRESULT CALLBACK ControlProc(HWND hwnd,UINT message,WPARAM w,LPARAM l){
             std::filesystem::path config(std::wstring(text,count-1));
             // Only another generation in this installation's bridge root.
             if(config.filename()!=L"taskbar.json"||!config.is_absolute()||config.lexically_normal()!=config)return 0;
-            if(config.parent_path().parent_path()!=session_path.parent_path().parent_path())return 0;
+            if(config.parent_path().parent_path()!=current_config().parent_path().parent_path())return 0;
             read_config(config);
-            if(auto tray=tray_anchor.get()){
-                tray.Dispatcher().RunAsync(core::CoreDispatcherPriority::Normal,[tray,config]{
-                    detach();select_config(config);stopped=false;attached=false;trace("reattach_dispatch");attach(tray);
-                });return 1;
-            }
-            trace("reattach_anchor_missing",E_FAIL);
+            uint64_t generation;
+            {std::lock_guard lock(owner_mutex);generation=++requested_generation;}
+            schedule_reattach(config,generation);return 1;
         }catch(...){trace("reattach_error",winrt::to_hresult());}return 0;
     }
     return DefWindowProcW(hwnd,message,w,l);

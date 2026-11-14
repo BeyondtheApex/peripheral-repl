@@ -11,6 +11,10 @@ $nativeDll = Join-Path $nativeBuild "$configuration/peripheral-taskbar-hook.dll"
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 & cmake --build $nativeBuild --config $configuration --target peripheral-taskbar-hook
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
+& cmake --build $nativeBuild --config $configuration --target peripheral-taskbar-layout-tests peripheral-taskbar-monitor-tests
+if ($LASTEXITCODE) { exit $LASTEXITCODE }
+& ctest --test-dir $nativeBuild -C $configuration --output-on-failure
+if ($LASTEXITCODE) { exit $LASTEXITCODE }
 $env:PERIPHERAL_NATIVE_SHA256 = (Get-FileHash -LiteralPath $nativeDll -Algorithm SHA256).Hash.ToLowerInvariant()
 $header = Get-Content -LiteralPath (Join-Path $nativeBuild 'native_build.h') -Raw
 if ($header -notmatch 'PERIPHERAL_NATIVE_BUILD "([0-9a-f]{64})"') { throw 'Native build identity missing' }

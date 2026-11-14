@@ -9,6 +9,9 @@ pub struct SurfaceView {
     pub dashboard: Option<crate::dashboard::Dashboard>,
     pub app_menu: Option<crate::backend_status::BackendStatus>,
     pub renders: u64,
+    pub taskbar_items: std::rc::Rc<std::cell::RefCell<Vec<f32>>>,
+    pub taskbar_left_order: std::rc::Rc<std::cell::Cell<bool>>,
+    pub taskbar_viewport: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
     commands: async_channel::Sender<Request>,
 }
 impl SurfaceView {
@@ -28,6 +31,9 @@ impl SurfaceView {
             dashboard: (id == crate::dashboard::ID).then(crate::dashboard::Dashboard::default),
             app_menu: (id == crate::app_menu::ID).then_some(Default::default()),
             renders: 0,
+            taskbar_items: Default::default(),
+            taskbar_left_order: Default::default(),
+            taskbar_viewport: Default::default(),
             commands,
         }
     }
@@ -35,6 +41,13 @@ impl SurfaceView {
 impl Render for SurfaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        if self.kind == SurfaceKind::Taskbar {
+            let viewport = window.viewport_size();
+            self.taskbar_viewport
+                .set((viewport.width.into(), viewport.height.into()));
+            *self.taskbar_items.borrow_mut() =
+                self.publications.iter().map(|p| p.surface.width).collect();
+        }
         if let Some(status) = self.app_menu {
             return crate::app_menu::render(status, &self.commands);
         }

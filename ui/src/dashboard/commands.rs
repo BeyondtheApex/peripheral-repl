@@ -30,7 +30,7 @@ impl Application {
                         self.refresh_dashboard(cx)?;
                         let s = &self.surfaces[ID];
                         native::popup::register(s.hwnd, ID.into())?;
-                        native::popup::show_at(s.hwnd, None)?;
+                        native::popup::show_at_tray(s.hwnd, self.surfaces["main"].hwnd, 1)?;
                     }
                 }
                 "dashboard_settings" => {
@@ -148,7 +148,7 @@ impl Application {
                     (options.width as f32 * scale) as i32,
                     (options.height as f32 * scale) as i32,
                 )?;
-                native::popup::show_at(surface.hwnd, None)?;
+                native::popup::show_at_tray(surface.hwnd, self.surfaces["main"].hwnd, 1)?;
             }
             surface.view.update(cx, |view, cx| {
                 view.publications = items;

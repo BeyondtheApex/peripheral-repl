@@ -32,6 +32,11 @@ pub(super) fn spawn_worker(
                         lifecycle::start(&ep, &root.lock().unwrap())?;
                         refresh(&ep)
                     }
+                    "elevate_backend" => {
+                        let active = root.lock().unwrap().clone();
+                        elevation::start(&ep, &active, false)?;
+                        refresh(&ep)
+                    }
                     "stop_backend" => {
                         lifecycle::stop(&ep)?;
                         Ok(json!({"stopped":true}))
@@ -40,8 +45,12 @@ pub(super) fn spawn_worker(
                         let ping = request(&ep, json!({"op":"ping"}))?;
                         let active =
                             PathBuf::from(ping["root"].as_str().context("backend workspace")?);
-                        lifecycle::stop(&ep)?;
-                        lifecycle::start(&ep, &active)?;
+                        if ping["host"]["elevated"] == true {
+                            elevation::start(&ep, &active, true)?;
+                        } else {
+                            lifecycle::stop(&ep)?;
+                            lifecycle::start(&ep, &active)?;
+                        }
                         *root.lock().unwrap() = active;
                         refresh(&ep)
                     }
@@ -57,11 +66,18 @@ pub(super) fn spawn_worker(
                 &notify,
                 json!({"op":"backend_result","command":command,"ok":result.is_ok(),"result":result.as_ref().ok(),"error":result.as_ref().err().map(|e|format!("{e:#}"))}),
             );
+            if operation == "elevate_backend"
+                && result.is_err()
+                && let Ok(state) = refresh(&ep)
+            {
+                send(&notify, json!({"op":"backend_state","state":state}));
+            }
             if ![
                 "connect",
                 "refresh",
                 "workspace",
                 "start_backend",
+                "elevate_backend",
                 "stop_backend",
                 "restart_backend",
                 "ui_snapshot",

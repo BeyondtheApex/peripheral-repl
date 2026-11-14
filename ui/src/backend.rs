@@ -8,11 +8,21 @@ use std::{
     os::windows::process::CommandExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, mpsc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 mod commands;
+mod elevation;
 mod lifecycle;
+pub(crate) mod preferences;
+mod resume;
+pub(crate) use elevation::run as run_elevated;
+pub(crate) use resume::Resume;
+pub(crate) fn elevate(ep: &Path, root: &Path) -> Result<()> {
+    elevation::start(ep, root, false)
+}
+mod update;
 use commands::spawn_worker;
+pub(crate) use update::stop_for_update;
 #[derive(Clone)]
 pub struct Client {
     queue: mpsc::SyncSender<Value>,
@@ -60,7 +70,11 @@ pub fn save_workspace(path: &Path) -> Result<()> {
     Ok(())
 }
 fn request(endpoint: &Path, command: Value) -> Result<Value> {
-    let response = peripheral_repl::protocol::request(endpoint, command)?;
+    let response = if matches!(command["op"].as_str(), Some("ping" | "shutdown")) {
+        peripheral_repl::protocol::request_timeout(endpoint, command, Duration::from_secs(2))?
+    } else {
+        peripheral_repl::protocol::request(endpoint, command)?
+    };
     anyhow::ensure!(
         response["ok"] == true,
         "{}",
@@ -203,6 +217,10 @@ impl Client {
     }
 }
 pub fn run_daemon(root: &Path) -> Result<()> {
+    let (runtime, root) = prepare_daemon(root)?;
+    peripheral_repl::protocol::serve(runtime, &endpoint(), root, None)
+}
+fn prepare_daemon(root: &Path) -> Result<(peripheral_repl::runtime::Runtime, PathBuf)> {
     let root = root.canonicalize()?;
     let mut runtime = peripheral_repl::runtime::Runtime::new(&root)?;
     // Host-owned policy, never supplied or widened by an installed Lua plugin.
@@ -218,5 +236,5 @@ pub fn run_daemon(root: &Path) -> Result<()> {
             .policy = peripheral_repl::bindings::load_policy(&policy)?;
     }
     runtime.dispatch(json!({"op":"create","instance":"default"}))?;
-    peripheral_repl::protocol::serve(runtime, &endpoint(), root, None)
+    Ok((runtime, root))
 }

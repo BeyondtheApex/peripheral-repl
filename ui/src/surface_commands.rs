@@ -47,7 +47,7 @@ impl Application {
                 Ok(json!({"path":path}))
             }
             "ping" => Ok(
-                json!({"version":env!("CARGO_PKG_VERSION"),"framework":"gpui-kit 0.9.0","icons":"Lucide SVG","transport":"authenticated loopback JSON","hardware_access":false}),
+                json!({"pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"framework":"gpui-kit 0.9.0","icons":"Lucide SVG","transport":"authenticated loopback JSON","hardware_access":false}),
             ),
             "snapshot" => {
                 let surfaces=self.surfaces.iter_mut().map(|(id,s)|{
@@ -88,6 +88,9 @@ impl Application {
                 bridge.state = "ready".into();
                 let mut exporter =
                     texture::Exporter::new(h, s.hwnd, bridge.dir.clone(), bridge.stats.clone());
+                exporter.taskbar_items = s.view.read(cx).taskbar_items.clone();
+                exporter.taskbar_left_order = s.view.read(cx).taskbar_left_order.clone();
+                exporter.taskbar_viewport = s.view.read(cx).taskbar_viewport.clone();
                 gpui_windows::frame_bridge::observe(s.hwnd, move |frame| exporter.publish(frame));
                 s.view.update(cx, |_, cx| cx.notify());
                 Ok(json!({}))
@@ -112,9 +115,12 @@ impl Application {
                     .last()
                     .and_then(|v| v["stage"].as_str())
                     .unwrap_or("no native acknowledgement");
+                let failure = crate::surfaces::taskbar_failure_summary(&diagnostics);
                 let error = format!(
-                    "host did not become ready within {} ms ({exit}); last stage: {stage}",
-                    b.startup_timeout_ms
+                    "host did not become ready within {} ms ({exit}); last stage: {stage}; {}; logs: {}",
+                    b.startup_timeout_ms,
+                    failure,
+                    b.dir.display()
                 );
                 b.stats.borrow_mut().error = Some(error.clone());
                 if let Some(event) = b.stop_event {

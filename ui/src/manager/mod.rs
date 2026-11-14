@@ -49,6 +49,7 @@ pub struct Manager {
     pub device_faces: std::collections::BTreeMap<String, (bool, u64)>,
     pub page_revision: u64,
     pub startup: crate::startup::State,
+    pub backend_preferences: Result<crate::backend::preferences::Preferences, String>,
     pub notice: Option<crate::notifications::Notice>,
     pub notice_revision: u64,
 }
@@ -84,6 +85,8 @@ impl Manager {
             device_faces: Default::default(),
             page_revision: 0,
             startup: crate::startup::state(),
+            backend_preferences: crate::backend::preferences::Preferences::load()
+                .map_err(|e| format!("{e:#}")),
             notice: None,
             notice_revision: 0,
         }
@@ -115,7 +118,7 @@ impl Manager {
         let mut confirmation = None;
         if let Some(action) = &self.confirm {
             let message = if action == "restart_explorer" {
-                "重启资源管理器后，任务栏和文件管理窗口可能暂时关闭。已准备的更新会一起替换 EXE 和 DLL。"
+                "有更新时会先停止本安装的后台并替换 EXE 和 DLL，再恢复原先运行的后台。更新且未加载本安装 DLL 时无需重启资源管理器；其他情况会重启，若无响应将结束主资源管理器进程，可能中断文件操作。"
             } else if action == "shutdown_backend" {
                 "关闭后台会停止所有插件并断开设备。插件的启用选项与配置会保留，下次启动后台时恢复。"
             } else {

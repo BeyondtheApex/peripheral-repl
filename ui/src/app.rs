@@ -13,6 +13,10 @@ pub(crate) struct Application {
     pub revision: Option<u64>,
     pub runtime_identity: String,
     pub taskbar_enabled: bool,
+    pub taskbar_side: crate::taskbar::Side,
+    pub taskbar_target: Value,
+    pub shell_busy: bool,
+    pub update_pending: bool,
     pub shell: Value,
     pub explorer: Option<u32>,
     pub backend_status: crate::backend_status::BackendStatus,
@@ -35,6 +39,12 @@ impl Application {
             revision: None,
             runtime_identity: String::new(),
             taskbar_enabled: enabled,
+            taskbar_side: crate::taskbar::Side::load(),
+            taskbar_target: crate::taskbar::primary_target(),
+            shell_busy: false,
+            update_pending: crate::updates::root()
+                .ok()
+                .is_some_and(|r| crate::updates::pending(&r).is_some()),
             shell: json!({}),
             explorer: None,
             backend_status: Default::default(),
@@ -72,6 +82,9 @@ impl Application {
             return result;
         }
         if let Some(result) = self.startup_command(v, cx) {
+            return result;
+        }
+        if let Some(result) = self.backend_preferences_command(v, cx) {
             return result;
         }
         if let Some(result) = self.clipboard_command(v, cx) {

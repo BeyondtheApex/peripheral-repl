@@ -1,4 +1,62 @@
 use super::*;
+pub(super) const RETRY_TIMER: usize = 0x50545259;
+
+// Explorer may have created its taskbar window before its notification area is
+// ready. Keep the desired icon and retry without failing the GUI or Lua update.
+fn remember_icon(hwnd: HWND, hook: &Hook, id: u32, icon: HICON) {
+    {
+        let mut icons = hook.tray.borrow_mut();
+        if let Some((_, previous)) = icons.iter_mut().find(|(key, _)| *key == id) {
+            unsafe {
+                let _ = DestroyIcon(*previous);
+            }
+            *previous = icon;
+        } else {
+            icons.push((id, icon));
+        }
+    }
+    sync(hwnd, hook);
+}
+
+pub(super) fn sync(hwnd: HWND, hook: &Hook) {
+    let mut pending = false;
+    for (id, icon) in hook.tray.borrow().iter() {
+        let mut data = tray_data(hwnd, *id, *icon);
+        unsafe {
+            if Shell_NotifyIconW(NIM_MODIFY, &data).as_bool()
+                || Shell_NotifyIconW(NIM_ADD, &data).as_bool()
+            {
+                data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
+                let _ = Shell_NotifyIconW(NIM_SETVERSION, &data);
+            } else {
+                pending = true;
+            }
+        }
+    }
+    unsafe {
+        let _ = KillTimer(Some(hwnd), RETRY_TIMER);
+        if pending {
+            let attempts = hook.tray_retry_attempts.get().saturating_add(1);
+            hook.tray_retry_attempts.set(attempts);
+            let delay = match attempts {
+                1 => 250,
+                2 => 500,
+                3 => 1000,
+                4 => 2000,
+                _ => 5000,
+            };
+            *hook.tray_error.borrow_mut() =
+                Some("Explorer tray is not ready; icon registration will retry".into());
+            if SetTimer(Some(hwnd), RETRY_TIMER, delay, None) == 0 {
+                *hook.tray_error.borrow_mut() =
+                    Some("Tray retry timer could not be created".into());
+            }
+        } else {
+            hook.tray_retry_attempts.set(0);
+            *hook.tray_error.borrow_mut() = None;
+        }
+    }
+}
 pub(super) fn svg_icon(path: &str, tint: u32, cx: &gpui_kit::App) -> Result<HICON> {
     let bytes = gpui_kit::assets::AllAssets
         .load(path)?
@@ -13,7 +71,7 @@ pub(super) fn svg_icon(path: &str, tint: u32, cx: &gpui_kit::App) -> Result<HICO
     )?;
     let mut pixels = rendered.as_bytes(0).context("SVG frame")?.to_vec();
     // GPUI exposes straight-alpha BGRA; Win32 icons require premultiplied BGRA.
-    for p in pixels.chunks_exact_mut(4) {
+    for p in pixels.as_chunks_mut::<4>().0 {
         p[0] = ((tint & 255) * p[3] as u32 / 255) as u8;
         p[1] = (((tint >> 8) & 255) * p[3] as u32 / 255) as u8;
         p[2] = (((tint >> 16) & 255) * p[3] as u32 / 255) as u8;
@@ -36,16 +94,7 @@ pub(super) fn svg_icon(path: &str, tint: u32, cx: &gpui_kit::App) -> Result<HICO
 pub fn add_tray(h: usize, id: u32, path: &str, cx: &gpui_kit::App) -> Result<()> {
     let hook = hook(h)?;
     let icon = svg_icon(path, hook.backend_status.get().color(), cx)?;
-    unsafe {
-        let mut data = tray_data(handle(h), id, icon);
-        if !Shell_NotifyIconW(NIM_ADD, &data).as_bool() {
-            let _ = DestroyIcon(icon);
-            anyhow::bail!("tray registration failed");
-        }
-        data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
-        let _ = Shell_NotifyIconW(NIM_SETVERSION, &data);
-        hook.tray.borrow_mut().push((id, icon));
-    }
+    remember_icon(handle(h), hook, id, icon);
     Ok(())
 }
 pub fn set_backend_tray(
@@ -58,22 +107,8 @@ pub fn set_backend_tray(
         return Ok(());
     }
     let icon = svg_icon("icons/cpu.svg", status.color(), cx)?;
-    let previous = hook.backend_status.replace(status);
-    let data = tray_data(handle(h), 1, icon);
-    unsafe {
-        if !Shell_NotifyIconW(NIM_MODIFY, &data).as_bool() {
-            hook.backend_status.set(previous);
-            let _ = DestroyIcon(icon);
-            anyhow::bail!("application tray update failed");
-        }
-        let mut icons = hook.tray.borrow_mut();
-        if let Some((_, old)) = icons.iter_mut().find(|(id, _)| *id == 1) {
-            let _ = DestroyIcon(*old);
-            *old = icon;
-        } else {
-            let _ = DestroyIcon(icon);
-        }
-    }
+    hook.backend_status.set(status);
+    remember_icon(handle(h), hook, 1, icon);
     hook.tray_updates.set(hook.tray_updates.get() + 1);
     Ok(())
 }
@@ -89,7 +124,7 @@ pub fn set_rendered_tray(h: usize, id: u32, image: &image::RgbaImage) -> Result<
         ((32 - thumbnail.height()) / 2) as i64,
     );
     let mut bgra = image.into_raw();
-    for pixel in bgra.chunks_exact_mut(4) {
+    for pixel in bgra.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
         for i in 0..3 {
             pixel[i] = (pixel[i] as u16 * pixel[3] as u16 / 255) as u8;
@@ -107,30 +142,7 @@ pub fn set_rendered_tray(h: usize, id: u32, image: &image::RgbaImage) -> Result<
         let _ = DeleteObject(mask.into());
         let _ = DeleteObject(color.into());
         let icon = result?;
-        let mut icons = hook.tray.borrow_mut();
-        let previous = icons.iter().position(|(key, _)| *key == id);
-        let mut data = tray_data(handle(h), id, icon);
-        if !Shell_NotifyIconW(
-            if previous.is_some() {
-                NIM_MODIFY
-            } else {
-                NIM_ADD
-            },
-            &data,
-        )
-        .as_bool()
-        {
-            let _ = DestroyIcon(icon);
-            anyhow::bail!("tray update failed");
-        }
-        data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
-        let _ = Shell_NotifyIconW(NIM_SETVERSION, &data);
-        if let Some(index) = previous {
-            let _ = DestroyIcon(icons[index].1);
-            icons[index].1 = icon;
-        } else {
-            icons.push((id, icon));
-        }
+        remember_icon(handle(h), hook, id, icon);
     }
     Ok(())
 }

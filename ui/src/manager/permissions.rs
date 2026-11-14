@@ -134,6 +134,7 @@ fn parameters(policy: &Value) -> AnyElement {
         ("hid_rules", "HID Feature / Control"),
         ("ble_write_rules", "Bluetooth GATT"),
         ("ble_pair_rules", "Bluetooth Pairing"),
+        ("gip_write_rules", "GIP Messages"),
     ] {
         for rule in policy[key].as_array().into_iter().flatten() {
             let mut content = div()
@@ -144,6 +145,8 @@ fn parameters(policy: &Value) -> AnyElement {
             // Canonical parameter order is stable across Rust/serde feature sets.
             for field in [
                 "operation",
+                "message_class",
+                "message_id",
                 "vendor_id",
                 "product_id",
                 "usage_page",
@@ -164,8 +167,9 @@ fn parameters(policy: &Value) -> AnyElement {
                         .as_str()
                         .map(str::to_owned)
                         .unwrap_or_else(|| value.to_string());
-                    let raw = if ["vendor_id", "product_id", "usage_page", "usage"].contains(&field)
-                    {
+                    let raw = if field == "message_id" {
+                        format!("0x{:02X}", value.as_u64().unwrap_or(0))
+                    } else if ["vendor_id", "product_id", "usage_page", "usage"].contains(&field) {
                         format!("0x{:04X}", value.as_u64().unwrap_or(0))
                     } else {
                         raw

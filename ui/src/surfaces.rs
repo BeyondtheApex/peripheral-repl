@@ -5,6 +5,8 @@ use anyhow::{Context as _, Result};
 use gpui_kit::*;
 use serde_json::{Value, json};
 use std::time::Duration;
+mod diagnostics;
+pub(crate) use diagnostics::failure_summary as taskbar_failure_summary;
 pub(crate) struct Bridge {
     pub(crate) child: std::process::Child,
     pub(crate) dir: std::path::PathBuf,
@@ -157,6 +159,11 @@ impl Application {
         })?;
         let window: AnyWindowHandle = window.into();
         let view = built.context("window content was not created")?;
+        if kind == SurfaceKind::Taskbar {
+            view.read(cx)
+                .taskbar_left_order
+                .set(self.taskbar_side.effective_left());
+        }
         native::install(hwnd, id.to_owned(), overlay, self.commands.clone())?;
         if floating {
             native::floating_frame(hwnd, true)?;
@@ -246,7 +253,7 @@ impl Application {
         };
         let mut stop_event = None;
         let child = if s.view.read(cx).kind == SurfaceKind::Taskbar {
-            let (child, event) = start_taskbar(&dir)?;
+            let (child, event) = start_taskbar(&dir, self.taskbar_side)?;
             stop_event = Some(event);
             child
         } else if s.view.read(cx).kind == SurfaceKind::Xaml {
@@ -287,6 +294,7 @@ impl Application {
 }
 fn start_taskbar(
     dir: &std::path::Path,
+    side: crate::taskbar::Side,
 ) -> Result<(std::process::Child, windows::Win32::Foundation::HANDLE)> {
     use std::os::windows::process::CommandExt;
     use windows::{
@@ -306,7 +314,7 @@ fn start_taskbar(
     let event = unsafe { CreateEventW(None, true, false, &HSTRING::from(&stop_name))? };
     let result = (|| -> Result<std::process::Child> {
         let dll = distribution::verified_dll()?;
-        let config = json!({"protocol":distribution::ABI,"native_build":distribution::expected_build(),"native_dll":dll,"producer_pid":std::process::id(),"explorer_pid":pid,"directory":dir,"stop_event":stop_name});
+        let config = json!({"protocol":distribution::ABI,"native_build":distribution::expected_build(),"native_dll":dll,"producer_pid":std::process::id(),"explorer_pid":pid,"directory":dir,"stop_event":stop_name,"side":side});
         std::fs::write(
             dir.join("taskbar.json"),
             serde_json::to_vec_pretty(&config)?,

@@ -85,9 +85,34 @@ fn dismiss_outside(point: POINT) {
     });
 }
 pub fn show_at(h: usize, parent: Option<usize>) -> Result<()> {
+    position(h, parent, None)
+}
+
+/// Anchor built-in tray panels to the icon rectangle, not the mouse's exact
+/// click pixel. Reopening or resizing must not move an otherwise identical panel.
+pub fn show_at_tray(h: usize, owner: usize, icon: u32) -> Result<()> {
+    let identifier = NOTIFYICONIDENTIFIER {
+        cbSize: std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32,
+        hWnd: handle(owner),
+        uID: icon,
+        ..Default::default()
+    };
+    let anchor = unsafe { Shell_NotifyIconGetRect(&identifier) }
+        .ok()
+        .filter(|r| r.right > r.left && r.bottom > r.top)
+        .map(|r| POINT {
+            x: r.left + (r.right - r.left) / 2,
+            y: r.top,
+        });
+    position(h, None, anchor)
+}
+
+fn position(h: usize, parent: Option<usize>, anchor: Option<POINT>) -> Result<()> {
     unsafe {
-        let mut point = POINT::default();
-        GetCursorPos(&mut point)?;
+        let mut point = anchor.unwrap_or_default();
+        if anchor.is_none() {
+            GetCursorPos(&mut point)?;
+        }
         let mut owner = RECT::default();
         if let Some(parent) = parent {
             GetWindowRect(handle(parent), &mut owner)?;

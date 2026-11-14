@@ -48,7 +48,9 @@ impl Application {
                 Target::Xaml => SurfaceKind::Xaml,
                 Target::Panel | Target::TrayList | Target::TrayCard => continue,
             };
-            if kind == SurfaceKind::Taskbar && !self.taskbar_enabled {
+            if kind == SurfaceKind::Taskbar
+                && (!self.taskbar_enabled || self.shell_busy || self.update_pending)
+            {
                 continue;
             }
             let id = if kind == SurfaceKind::Taskbar {
@@ -103,6 +105,9 @@ impl Application {
         for (id, (kind, mut items)) in desired {
             if kind == SurfaceKind::Taskbar {
                 peripheral_repl::ui::order::taskbar(&mut items);
+                if self.taskbar_side.effective_left() {
+                    items.reverse();
+                }
             }
             if let Err(error) = self.reconcile_surface(&id, kind, items, cx) {
                 errors.push(format!("{id}: {error:#}"));

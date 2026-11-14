@@ -55,6 +55,11 @@ pub struct Exporter {
     producer: usize,
     dir: PathBuf,
     stats: Rc<RefCell<Stats>>,
+    pub taskbar_items: Rc<RefCell<Vec<f32>>>,
+    pub taskbar_left_order: Rc<std::cell::Cell<bool>>,
+    pub taskbar_viewport: Rc<std::cell::Cell<(f32, f32)>>,
+    configured_items: Vec<f32>,
+    configured_viewport: (f32, f32),
 }
 impl Exporter {
     pub fn new(consumer: usize, producer: usize, dir: PathBuf, stats: Rc<RefCell<Stats>>) -> Self {
@@ -68,6 +73,11 @@ impl Exporter {
             producer,
             dir,
             stats,
+            taskbar_items: Default::default(),
+            taskbar_left_order: Default::default(),
+            taskbar_viewport: Default::default(),
+            configured_items: Vec::new(),
+            configured_viewport: (0., 0.),
         }
     }
     fn configure(&mut self, frame: &Frame<'_>, desc: D3D11_TEXTURE2D_DESC) -> Result<()> {
@@ -109,7 +119,9 @@ impl Exporter {
         let dxgi: IDXGIDevice = frame.device.cast()?;
         let adapter = unsafe { dxgi.GetAdapter()? };
         let info = unsafe { adapter.GetDesc()? };
-        let metadata = json!({"generation":self.generation,"width":desc.Width,"height":desc.Height,"format":desc.Format.0,"adapter_low":info.AdapterLuid.LowPart,"adapter_high":info.AdapterLuid.HighPart,"producer_hwnd":self.producer,"names":self.slots.iter().map(|s|s.name.clone()).collect::<Vec<_>>()});
+        self.configured_items = self.taskbar_items.borrow().clone();
+        self.configured_viewport = self.taskbar_viewport.get();
+        let metadata = json!({"generation":self.generation,"width":desc.Width,"height":desc.Height,"format":desc.Format.0,"adapter_low":info.AdapterLuid.LowPart,"adapter_high":info.AdapterLuid.HighPart,"producer_hwnd":self.producer,"names":self.slots.iter().map(|s|s.name.clone()).collect::<Vec<_>>(),"taskbar_items":self.configured_items,"taskbar_left_order":self.taskbar_left_order.get(),"logical_width":self.configured_viewport.0,"logical_height":self.configured_viewport.1});
         std::fs::write(self.dir.join("frame.tmp"), serde_json::to_vec(&metadata)?)?;
         std::fs::rename(self.dir.join("frame.tmp"), self.dir.join("frame.json"))?;
         self.size = (desc.Width, desc.Height);
@@ -128,6 +140,8 @@ impl Exporter {
         }
         if self.size != (desc.Width, desc.Height)
             || self.device_identity != Interface::as_raw(frame.device) as usize
+            || self.configured_items != *self.taskbar_items.borrow()
+            || self.configured_viewport != self.taskbar_viewport.get()
         {
             self.configure(&frame, desc)?;
         }

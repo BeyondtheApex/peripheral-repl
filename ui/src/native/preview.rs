@@ -21,7 +21,7 @@ pub fn cache_preview(h: usize, image: image::RgbaImage) -> Result<()> {
 }
 pub fn present_preview(h: usize, image: &image::RgbaImage, live: bool) -> Result<()> {
     let mut bytes = image.as_raw().clone();
-    for p in bytes.chunks_exact_mut(4) {
+    for p in bytes.as_chunks_mut::<4>().0 {
         p.swap(0, 2);
         for c in 0..3 {
             p[c] = (p[c] as u16 * p[3] as u16 / 255) as u8;

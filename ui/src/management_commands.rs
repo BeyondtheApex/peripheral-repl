@@ -37,11 +37,19 @@ impl Application {
                     Some("start_backend") => self.control_backend("start", cx)?,
                     Some("stop_backend" | "shutdown") => self.control_backend("stop", cx)?,
                     Some("restart_backend") => self.control_backend("restart", cx)?,
+                    Some("elevate_backend") => self.control_backend("elevate", cx)?,
                     _ => self.backend.command(v["command"].clone())?,
                 },
                 "backend_result" => {
                     let operation = v["command"]["op"].as_str().unwrap_or("");
-                    if ["start_backend", "stop_backend", "restart_backend"].contains(&operation) {
+                    if [
+                        "start_backend",
+                        "stop_backend",
+                        "restart_backend",
+                        "elevate_backend",
+                    ]
+                    .contains(&operation)
+                    {
                         self.set_backend_status(
                             if v["ok"] != true {
                                 BackendStatus::Error
@@ -124,6 +132,7 @@ impl Application {
                                 "start_backend" => "后台已启动",
                                 "stop_backend" => "后台已停止",
                                 "restart_backend" => "后台已重启",
+                                "elevate_backend" => "后台已以管理员权限启动",
                                 "plugin_enable" | "plugin_restart" => "插件运行状态已更新",
                                 _ => "操作已完成",
                             };
@@ -321,6 +330,10 @@ impl Application {
                     _ => anyhow::bail!("invalid picker purpose"),
                 },
                 "update_staged" => {
+                    self.update_pending = crate::updates::root()
+                        .ok()
+                        .is_some_and(|r| crate::updates::pending(&r).is_some());
+                    self.reconcile(cx)?;
                     if let Some(error) = v["error"].as_str() {
                         anyhow::bail!("{error}");
                     }

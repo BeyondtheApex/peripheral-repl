@@ -86,7 +86,9 @@ fn write(path: &str, name: &str, value: Option<&str>) -> Result<()> {
 pub fn status() -> Result<(bool, bool, bool)> {
     let entry = read(RUN, NAME, RRF_RT_REG_SZ)?.map(|bytes| {
         let wide = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .take_while(|v| *v != 0)
             .collect::<Vec<_>>();

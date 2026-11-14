@@ -25,6 +25,7 @@ mod shell;
 mod startup;
 mod surface_commands;
 mod surfaces;
+mod taskbar;
 mod texture;
 mod updates;
 mod view;
@@ -34,6 +35,19 @@ use serde_json::{Value, json};
 fn main() -> Result<()> {
     let args = std::env::args().collect::<Vec<_>>();
     if let Some(mode) = args.get(1) {
+        if mode == "--update-report" {
+            anyhow::ensure!(
+                args.len() <= 3,
+                "usage: peripheral-ui.exe --update-report [installation-directory]"
+            );
+            let root = args
+                .get(2)
+                .map(std::path::PathBuf::from)
+                .map(Ok)
+                .unwrap_or_else(updates::root)?;
+            updates::write_report(&root)?;
+            return Ok(());
+        }
         if ["--xaml-consumer", "--taskbar-loader", "--native-check"].contains(&mode.as_str()) {
             match distribution::run_helper(mode, &args[2..]) {
                 Ok(code) => std::process::exit(code),
@@ -64,18 +78,40 @@ fn main() -> Result<()> {
                 return peripheral_repl::protocol::mcp_bridge(std::path::PathBuf::from(&args[2]));
             }
             "--native-hid-worker" => return peripheral_repl::native_hid::serve(),
+            "--daemon-elevated" => return backend::run_elevated(&args[2..]),
+            "--elevate-backend" => {
+                anyhow::ensure!(
+                    args.len() == 4,
+                    "usage: --elevate-backend <workspace> <endpoint-file>"
+                );
+                return backend::elevate(
+                    std::path::Path::new(&args[3]),
+                    std::path::Path::new(&args[2]),
+                );
+            }
             "--daemon" => {
                 return backend::run_daemon(std::path::Path::new(
                     args.get(2).context("workspace path")?,
                 ));
             }
-            "--restart-shell" => return updates::restart_shell(),
+            "--restart-shell" => {
+                return updates::restart_shell(args.get(2).is_some_and(|a| a == "--allow-stop"));
+            }
             "--apply-update" => return updates::apply(&args[2..]),
             _ => {}
         }
     }
     let autostart = args.get(1).is_some_and(|s| s == "--autostart");
+    let resume_backend = match args.get(1).map(String::as_str) {
+        Some("--resume-backend") => backend::Resume::Normal,
+        Some("--resume-backend-elevated") => backend::Resume::Elevated,
+        _ => backend::Resume::Stopped,
+    };
     let _singleton = native::singleton()?;
+    let update_recovery_error = updates::root()
+        .and_then(|root| updates::reconcile_pending(&root))
+        .err()
+        .map(|error| format!("Update state check failed: {error:#}"));
     let (sender, receiver, session) = control::start()?;
     let _ = distribution::write_report();
     eprintln!("UI control: {}", session.display());
@@ -92,7 +128,27 @@ fn main() -> Result<()> {
                 return;
             }
             application.start_watch();
-            if autostart && let Err(error) = application.control_backend("start", cx) {
+            if let Some(error) = &update_recovery_error {
+                application.notify("error", error.clone(), cx);
+            }
+            if let Ok(root) = updates::root()
+                && let Some(result) = updates::result(&root)
+                && matches!(
+                    result["state"].as_str(),
+                    Some("error" | "applied_shell_error" | "applied_ui_error")
+                )
+            {
+                application.notify(
+                    "error",
+                    result["message"]
+                        .as_str()
+                        .unwrap_or("Update failed; see updates/result.json"),
+                    cx,
+                );
+            }
+            if let Some(action) = resume_backend.action().or(autostart.then_some("start"))
+                && let Err(error) = application.control_backend(action, cx)
+            {
                 application.notify("error", format!("{error:#}"), cx);
                 if let Some(main) = application.surfaces.get("main") {
                     native::show(main.hwnd, true);

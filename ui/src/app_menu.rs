@@ -109,7 +109,7 @@ impl Application {
                         cx.notify();
                     });
                     native::popup::register(surface.hwnd, ID.into())?;
-                    native::popup::show_at(surface.hwnd, None)?;
+                    native::popup::show_at_tray(surface.hwnd, self.surfaces["main"].hwnd, 1)?;
                 }
                 Ok(json!({}))
             })()),

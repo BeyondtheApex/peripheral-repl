@@ -31,6 +31,9 @@
 #include <sstream>
 #include <array>
 #include <memory>
+#include <functional>
+#include <vector>
+#include <cmath>
 #include "native_build.h"
 
 namespace xaml=winrt::Windows::UI::Xaml;
@@ -55,7 +58,12 @@ struct Host {
     HWND hwnd{},island{},producer{};
     uint64_t generation{},frames{},clicks{};
     uint32_t pixel_width{},pixel_height{};
+    double logical_width{},logical_height{};
     bool embedded=false;
+    bool left_order=false;
+    std::vector<double> item_widths;
+    std::function<void()> layout_changed;
+    json::JsonObject layout_status{nullptr};
     std::string error;
     hosting::WindowsXamlManager manager{nullptr};
     hosting::DesktopWindowXamlSource source{nullptr};
@@ -84,6 +92,7 @@ struct Host {
             wchar_t module_path[32768]{};GetModuleFileNameW(current,module_path,32768);
             value.Insert(L"native_module",json::JsonValue::CreateStringValue(module_path));
             value.Insert(L"error",error.empty()?json::JsonValue::CreateNullValue():json::JsonValue::CreateStringValue(winrt::to_hstring(error)));
+            if(layout_status)value.Insert(L"layout",layout_status);
             std::ofstream out(dir/L"consumer.json",std::ios::binary|std::ios::trunc);
             out<<winrt::to_string(value.Stringify());
         } catch(...){}
@@ -131,24 +140,33 @@ struct Host {
         if(!producer)return;
         auto point=e.GetCurrentPoint(panel);
         auto position=point.Position();
-        auto x=static_cast<short>(position.X*panel.CompositionScaleX());
-        auto y=static_cast<short>(position.Y*panel.CompositionScaleY());
+        auto x=static_cast<short>(position.X*input_scale_x());
+        auto y=static_cast<short>(position.Y*input_scale_y());
         auto flags=(point.Properties().IsLeftButtonPressed()?MK_LBUTTON:0)|(point.Properties().IsRightButtonPressed()?MK_RBUTTON:0);
         PostMessageW(producer,InputMessage,MAKEWPARAM(message,flags),MAKELPARAM(x,y));
     }
+    double input_scale_x() const {return embedded&&logical_width>0?pixel_width/logical_width:panel.CompositionScaleX();}
+    double input_scale_y() const {return embedded&&logical_height>0?pixel_height/logical_height:panel.CompositionScaleY();}
     void update_scale(){
         if(!swap||!pixel_width||!pixel_height)return;
-        auto sx=panel.CompositionScaleX(),sy=panel.CompositionScaleY();
+        auto sx=static_cast<float>(input_scale_x()),sy=static_cast<float>(input_scale_y());
         if(sx<=0||sy<=0)return;
         DXGI_MATRIX_3X2_F matrix{1.f/sx,0,0,1.f/sy,0,0};
         winrt::check_hresult(swap.as<IDXGISwapChain2>()->SetMatrixTransform(&matrix));
         panel.Width(pixel_width/sx);panel.Height(pixel_height/sy);
+        if(layout_changed)layout_changed();
     }
     void configure() {
         auto meta=metadata();
         uint32_t width=static_cast<uint32_t>(meta.GetNamedNumber(L"width"));
         uint32_t height=static_cast<uint32_t>(meta.GetNamedNumber(L"height"));
         if(!width||!height||width>4096||height>2160)throw winrt::hresult_invalid_argument();
+        if(embedded){
+            left_order=meta.GetNamedBoolean(L"taskbar_left_order",false);
+            logical_width=meta.GetNamedNumber(L"logical_width");logical_height=meta.GetNamedNumber(L"logical_height");
+            if(!std::isfinite(logical_width)||!std::isfinite(logical_height)||logical_width<=0||logical_height<=0
+                ||logical_width>4096||logical_height>2160)throw winrt::hresult_invalid_argument();
+        }
         if(swap){panel.as<ISwapChainPanelNative>()->SetSwapChain(nullptr);swap=nullptr;}
         winrt::com_ptr<IDXGIFactory2> factory;
         winrt::check_hresult(CreateDXGIFactory1(__uuidof(IDXGIFactory2),factory.put_void()));
@@ -165,6 +183,12 @@ struct Host {
         winrt::check_hresult(factory->CreateSwapChainForComposition(device.get(),&desc,nullptr,swap.put()));
         winrt::check_hresult(panel.as<ISwapChainPanelNative>()->SetSwapChain(swap.get()));
         pixel_width=width;pixel_height=height;update_scale();
+        item_widths.clear();
+        if(embedded){
+            auto items=meta.GetNamedArray(L"taskbar_items",json::JsonArray());
+            if(items.Size()>64)throw winrt::hresult_invalid_argument();
+            for(auto const& item:items)item_widths.push_back(item.GetNumber());
+        }
         auto names=meta.GetNamedArray(L"names");if(names.Size()!=2)throw winrt::hresult_invalid_argument();
         auto d1=device.as<ID3D11Device1>();
         for(unsigned i=0;i<2;++i){textures[i]=nullptr;mutexes[i]=nullptr;

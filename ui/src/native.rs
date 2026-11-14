@@ -42,6 +42,8 @@ struct Hook {
     tray: RefCell<Vec<(u32, HICON)>>,
     backend_status: Cell<crate::backend_status::BackendStatus>,
     tray_updates: Cell<u64>,
+    tray_retry_attempts: Cell<u32>,
+    tray_error: RefCell<Option<String>>,
     taskbar_created: u32,
     clicks: Cell<u64>,
     thumb_requests: Cell<u64>,
@@ -101,11 +103,27 @@ impl Drop for Singleton {
     }
 }
 pub fn singleton() -> Result<Singleton> {
+    // Debug builds can use an explicitly isolated data directory for full UI
+    // lifecycle tests without stopping the user's production manager.
+    #[cfg(debug_assertions)]
+    let isolated_name = std::env::var_os("PERIPHERAL_UI_DATA").map(|path| {
+        use sha2::{Digest, Sha256};
+        windows::core::HSTRING::from(format!(
+            "Local\\PeripheralManagerTest_{:x}",
+            Sha256::digest(path.to_string_lossy().as_bytes())
+        ))
+    });
+    #[cfg(not(debug_assertions))]
+    let isolated_name: Option<windows::core::HSTRING> = None;
     unsafe {
         let mutex = windows::Win32::System::Threading::CreateMutexW(
             None,
             false,
-            w!("Local\\PeripheralManager"),
+            isolated_name
+                .as_ref()
+                .map_or(w!("Local\\PeripheralManager"), |name| {
+                    windows::core::PCWSTR(name.as_ptr())
+                }),
         )?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
             let _ = CloseHandle(mutex);
@@ -165,6 +183,8 @@ pub fn install(
         tray: RefCell::new(Vec::new()),
         backend_status: Cell::new(Default::default()),
         tray_updates: Cell::new(0),
+        tray_retry_attempts: Cell::new(0),
+        tray_error: RefCell::new(None),
         taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
         clicks: Cell::new(0),
         thumb_requests: Cell::new(0),
@@ -231,7 +251,7 @@ pub fn info(h: usize) -> serde_json::Value {
         let mut rect = RECT::default();
         let _ = GetWindowRect(handle(h), &mut rect);
         let hk = hook(h).ok();
-        json!({"hwnd":h,"bounds":{"x":rect.left,"y":rect.top,"width":rect.right-rect.left,"height":rect.bottom-rect.top},"corners":appearance::corner_status(h),"backdrop":gpui_windows::backdrop::status(h).map(|s|json!({"path":s.path,"error":s.error})),"ex_style":GetWindowLongPtrW(handle(h),GWL_EXSTYLE),"foreground":GetForegroundWindow()==handle(h),"visible":IsWindowVisible(handle(h)).as_bool(),"backend_tray":hk.filter(|h|h.id=="main").map(|h|json!({"status":h.backend_status.get(),"color":format!("#{:06x}",h.backend_status.get().color()),"label":h.backend_status.get().label(),"updates":h.tray_updates.get(),"menu":tray_menu::items(h.backend_status.get())})),"native_clicks":hk.map(|x|x.clicks.get()),"thumbnail_requests":hk.map(|x|x.thumb_requests.get()),"preview_error":hk.and_then(|x|x.preview_error.borrow().clone())})
+        json!({"hwnd":h,"bounds":{"x":rect.left,"y":rect.top,"width":rect.right-rect.left,"height":rect.bottom-rect.top},"corners":appearance::corner_status(h),"backdrop":gpui_windows::backdrop::status(h).map(|s|json!({"path":s.path,"error":s.error})),"ex_style":GetWindowLongPtrW(handle(h),GWL_EXSTYLE),"foreground":GetForegroundWindow()==handle(h),"visible":IsWindowVisible(handle(h)).as_bool(),"backend_tray":hk.filter(|h|h.id=="main").map(|h|json!({"status":h.backend_status.get(),"color":format!("#{:06x}",h.backend_status.get().color()),"label":h.backend_status.get().label(),"updates":h.tray_updates.get(),"registration_error":h.tray_error.borrow().clone(),"retry_attempts":h.tray_retry_attempts.get(),"menu":tray_menu::items(h.backend_status.get())})),"native_clicks":hk.map(|x|x.clicks.get()),"thumbnail_requests":hk.map(|x|x.thumb_requests.get()),"preview_error":hk.and_then(|x|x.preview_error.borrow().clone())})
     }
 }
 pub fn place(h: usize, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
