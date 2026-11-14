@@ -25,9 +25,10 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 tempfile = "3.23"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "=0.62.2", features = ["Devices_Bluetooth", "Devices_Bluetooth_GenericAttributeProfile", "Devices_Enumeration", "Foundation", "Storage_Streams"] }
+windows = { version = "=0.62.2", features = ["Devices_Bluetooth", "Devices_Bluetooth_GenericAttributeProfile", "Devices_Enumeration", "Devices_Power", "Gaming_Input", "Gaming_Input_Custom", "Foundation", "Foundation_Collections", "Storage_Streams", "System", "System_Power", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_LibraryLoader", "Win32_UI_Input_XboxController", "Win32_System_Com", "Win32_System_WinRT", "Win32_System_Threading"] }
 
 windows-future = "=0.3.2"
+windows-core = "=0.62.2"
 windows-collections = "=0.3.2"
 
 [dev-dependencies]

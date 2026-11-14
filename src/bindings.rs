@@ -101,6 +101,8 @@ pub struct Policy {
     pub ble_write_rules: Vec<crate::bluetooth::WriteRule>,
     #[serde(default)]
     pub ble_pair_rules: Vec<crate::bluetooth::PairRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gip_write_rules: Vec<crate::gip::WriteRule>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ReportRule {
@@ -569,6 +571,8 @@ pub fn install(lua: &Lua, ctx: &Context) -> Result<()> {
     crate::io::install(lua, ctx)?;
     crate::device_state::install(lua, ctx)?;
     crate::bluetooth::install(lua, ctx)?;
+    crate::gip::install(lua, ctx)?;
+    crate::gamepad::install(lua)?;
     crate::error::install(lua)?;
     crate::extras::install(lua, ctx)?;
     crate::ui::install(lua, ctx)?;
@@ -716,5 +720,6 @@ pub fn validate_policy(policy: &Policy) -> Result<()> {
     }
     crate::bluetooth::validate_rules(&policy.ble_write_rules)?;
     crate::bluetooth::validate_pair_rules(&policy.ble_pair_rules)?;
+    crate::gip::validate_rules(&policy.gip_write_rules)?;
     Ok(())
 }

@@ -50,6 +50,20 @@ enum Command {
     },
     /// Enumerate HID collections without opening them.
     Devices,
+    /// Generic Windows GIP discovery and diagnostics. Never sends device commands.
+    Gip {
+        #[arg(default_value="list", value_parser=["list","capabilities","diagnostics"])]
+        action: String,
+        /// Decimal VID/PID. Use Lua for hexadecimal literals and interface GUIDs.
+        #[arg(long)]
+        vendor_id: Option<u16>,
+        #[arg(long)]
+        product_id: Option<u16>,
+        #[arg(long)]
+        interface_guid: Vec<String>,
+        #[arg(long, default_value_t = 1000)]
+        wait_ms: u64,
+    },
     /// Bluetooth LE discovery; never connects or pairs automatically.
     Bluetooth {
         #[arg(default_value = "adapters", value_parser = ["adapters", "list", "scan"])]
@@ -155,6 +169,15 @@ fn main() -> Result<()> {
             )?)?;
         }
         Command::Devices => print_result(dispatch(json!({"op":"devices"}))?)?,
+        Command::Gip {
+            action,
+            vendor_id,
+            product_id,
+            interface_guid,
+            wait_ms,
+        } => print_result(dispatch(
+            json!({"op":"gip","action":action,"filter":{"vendor_id":vendor_id,"product_id":product_id,"interface_guids":interface_guid,"wait_ms":wait_ms}}),
+        )?)?,
         Command::Bluetooth {
             action,
             duration_ms,
@@ -245,7 +268,7 @@ fn shell(dispatch: &mut impl FnMut(Value) -> Result<Value>) -> Result<()> {
         }
         if line.trim() == ":help" {
             println!(
-                ":new NAME, :use NAME, :instances, :devices, :bluetooth adapters|list|scan, :load PATH, :reload PATH\n:tasks, :cancel TASK_ID, :stats, :snapshot, :events, :pause, :resume, :start, :stop, :destroy\n:actions, :invoke NAME JSON, :config, :configure JSON, :lifecycle\n:begin / :end for multiline Lua; :quit. Lua APIs: ble.*, runtime.*, buffer.*, errors.*, events.*, log.*, config.*, lifecycle.*, storage.*"
+                ":new NAME, :use NAME, :instances, :devices, :bluetooth adapters|list|scan, :gip list|capabilities|diagnostics, :load PATH, :reload PATH\n:tasks, :cancel TASK_ID, :stats, :snapshot, :events, :pause, :resume, :start, :stop, :destroy\n:actions, :invoke NAME JSON, :config, :configure JSON, :lifecycle\n:begin / :end for multiline Lua; :quit. Lua APIs: gip.*, gamepad.*, ble.*, runtime.*, buffer.*, errors.*, events.*, log.*, config.*, lifecycle.*, storage.*"
             );
             continue;
         }
@@ -267,6 +290,7 @@ fn shell(dispatch: &mut impl FnMut(Value) -> Result<Value>) -> Result<()> {
                 "bluetooth" => {
                     json!({"op":op,"action":if arg.is_empty(){"adapters"}else{arg},"duration_ms":3000})
                 }
+                "gip" => json!({"op":"gip","action":if arg.is_empty(){"list"}else{arg}}),
                 "cancel" => match arg.parse::<u64>() {
                     Ok(task) => json!({"op":op,"instance":instance,"task":task}),
                     Err(e) => {

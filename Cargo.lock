@@ -955,6 +955,7 @@ dependencies = [
  "uuid",
  "windows",
  "windows-collections",
+ "windows-core",
  "windows-future",
 ]
 

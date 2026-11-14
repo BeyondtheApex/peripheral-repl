@@ -354,7 +354,7 @@ Node style.width/style.height specify fixed logical dimensions. The containing d
 
 ## Position preferences
 
-Each surface optionally declares `position_preference={taskbar,overview}`, two signed 32-bit integers, both defaulting to zero. A larger first value puts a taskbar item later (to the right); a larger second value puts a quick-view item earlier (toward the top), in both card and list modes. Equal values sort by session ID, then surface ID (case-sensitive), never publication time, revision, title or generation. Managed plugin session IDs are stable. Changing the values reorders existing content without creating windows or new device samplers.
+Each surface optionally declares `position_preference={taskbar,overview}`, two signed 32-bit integers, both defaulting to zero. A larger first value puts a taskbar item farther outward (left in the left group, right in the right group), retaining it first when space is limited; a larger second value puts a quick-view item earlier (toward the top), in both card and list modes. Equal values sort by session ID, then surface ID (case-sensitive), never publication time, revision, title or generation. Managed plugin session IDs are stable. Changing the values reorders existing content without creating windows or new device samplers.
 
 ```lua
 ui.publish('battery', {
@@ -365,6 +365,22 @@ ui.position('battery', -5, 30) -- change only this surface's ordering
 ```
 
 Declare the pair on every relevant `taskbar`, `tray_card` or `tray_list` surface. Other targets ignore it; it is not an x/y coordinate or the OS ordering of independent tray icons. `ui.position` changes an existing, session-owned surface and returns its revision; identical values are a no-op. `ui.update` remains a node patch. Republishing without the preference resets it to zero; persist user choices with Lua configuration/storage and include them when publishing on startup. Protocol 6 rejects an incompatible GUI/backend pairing, while still accepting legacy version-5 Lua documents. Existing plugins do not require changes to retain their default order.
+
+Taskbar content attaches only to the Windows primary display. Match the node's XamlRoot to the diagnostic DesktopWindowXamlSource, obtain its native host HWND, and verify the owning taskbar and primary-monitor flag. Multiple islands may share a thread; discovery order and equal dimensions are not identities. Only roots without an exposed source use a unique-thread-window fallback; unresolved identities fail closed. Primary-display, connection, and resolution changes recreate the bridge. The native layer hides an obsolete target before remounting. Texture metadata carries logical dimensions so mixed display DPI does not distort sizing or pointer coordinates.
+
+The host setting “Settings → Taskbar and updates → Taskbar position” controls placement. Right hugs the left edge of the system tray in the measured free space after app controls. Left hugs the right edge of widgets in the space before Start when centered (the left taskbar edge if widgets are hidden), falling back to right when left-aligned. Recognized system controls, including Start, apps, widgets and the entire tray end, are reserved; Explorer's original column widths and margins are not changed.
+
+When space is insufficient, retain consecutive items from the outside inward (larger `position_preference[1]` first; stable IDs break ties). Hide whole low-priority inner items without shrinking or cutting individual items, or replacing a high-priority item with a smaller lower-priority one. All items may be hidden and restore automatically when space returns; Lua publications, device sessions and overview items remain available. XAML layout events and a 250ms watchdog remeasure resolution, DPI, app and tray changes. Unknown Start anchors, coordinate spaces or invalid dimensions fail closed. Settings show visible/total counts and hiding reasons. This remains a private Windows 11 integration; isolated XAML tests do not establish compatibility with every OS build. Upgrade the matching EXE/DLL pair; Explorer already holding the old DLL needs a normal restart before using the new implementation.
+
+Updates use `updates/pending`, `updates/previous`, and `updates/result.json` inside the installation. Staging pauses loading the old DLL. The updater is a copy of the currently running EXE at `updates/runner/<UUID>/peripheral-ui.exe`, so its command-line contract does not depend on the target version. Package verification, capture of the parent process handle, and Explorer restart permission checks precede the acknowledgement that allows the UI to close. Applying shuts down this installation's backend, waits for the old UI to exit, replaces and verifies the EXE/DLL pair, and restores the UI, backend, and enabled plugins. In-memory Lua sessions do not survive updates. Replacement failure attempts rollback of both binaries and the manifest while retaining the package. A committed update followed by shell recovery failure is reported separately to avoid reapplying it.
+
+Legacy Restart Manager error 351 is `ERROR_FAIL_SHUTDOWN`, not a HID error. The new restart has bounded waits. Only the new UI confirmation permits terminating the primary taskbar's Explorer process after graceful exit times out; file operations may be interrupted. Legacy UI requests do not implicitly receive that permission. Do not run manual and automatic updates concurrently. For attachment failures retain the latest bridge's `taskbar-trace.jsonl`, `consumer.json` if present, Windows version, and `updates/result.json`; a timeout alone cannot distinguish primary-monitor filtering, native loading, or stale DLL conflicts.
+
+Do not interpret a historical `applied` message as confirmation of the current update. Each staging/apply attempt refreshes `updates/result.json`, including time, installation path, updater executable path and package manifest hashes; phases are appended to `updates/history.jsonl`. At startup, a ready marker is reconciled only after verifying the pending package and matching both actual installed binary SHA-256 hashes. Recovery does not reinstall or overwrite previous backups. Staging identical binaries is rejected. For contradictory state on another PC, run the new executable with `peripheral-ui.exe --update-report "actual installation directory"`. It writes `updates/diagnostics.json` in that directory with actual installed/pending/backup hashes, marker, last result, running UI executable paths and loaded Explorer DLLs. It does not load DLLs, connect the backend, or restart Explorer.
+
+A stopped backend, absent taskbar publications, or an unmounted taskbar is not an update prerequisite. Only this installation’s backend is stopped; other installations are left alone. Applying an update restarts Explorer only if it actually maps this installation’s DLL, independently of the taskbar-enabled preference. A previously stopped backend stays stopped; a running backend resumes. The standalone Restart Explorer button still requests a restart.
+
+Taskbar placement reserves the system tray’s outer footprint without counting descendants animated during expansion/collapse. Actual footprint, resolution and DPI changes still trigger layout. Built-in overview and context-menu panels anchor to the system-reported tray icon rectangle instead of the exact mouse click pixel.
 
 ## HID contracts, exceptions and offline validation
 
@@ -383,3 +399,61 @@ Primary references checked 2026-11-11:
 - Microsoft: https://learn.microsoft.com/en-us/windows-hardware/drivers/hid/obtaining-hid-reports
 - HIDAPI API contract: https://libusb.info/hidapi/group__API.html
 - Pinned Windows implementation: `hidapi` 2.6.7, `etc/hidapi/windows/hid.c`, `hid_get_report`/`hid_get_input_report` (included in the Cargo dependency source).
+
+
+## Generic GIP and controller battery APIs
+
+Application updates preserve the previous backend startup mode: a stopped backend stays stopped, a standard backend restarts normally, and an elevated backend is restored through a new UAC request from the unelevated GUI. Cancelling that UAC request leaves the backend stopped; restart it in Settings. Updates never bypass system consent.
+
+GIP is a Windows controller transport alongside HID and BLE. Rust owns discovery, connection generations, callbacks, bounded queues, cancellation and exact write authorization. Lua owns vendor protocols, queries, heartbeats, decoding, stale-state rules and UI. Rust never sends an automatic heartbeat, guesses a battery offset, replaces a driver, or invokes a firmware updater.
+
+The normal distribution is still `peripheral-ui.exe` plus the taskbar DLL. The same EXE runs `--daemon`; no separate GIP service or vendor DLL is shipped. In **Settings → Backend device access**, start the backend as administrator when the device requires background privileges. The GUI and MCP bridge stay unelevated and keep using the same protected endpoint. UAC approval precedes shutdown, so cancelling UAC keeps the current backend alive. Restart preserves the running backend's privilege mode; stop then start returns to standard privileges. Elevation does not expand per-plugin packet grants. Use the same Windows account, not credentials for a different administrator.
+
+| Lua API | Contract |
+|---|---|
+| `gip.capabilities()` | Platform capability, process `host.elevated`, restrictions; not a promise that a particular device is ready |
+| `gip.diagnostics()` | Last 64 discovery/aggregation stages in this backend process; metadata only |
+| `gip.background()` | Session-owned lease requesting GameInput v4 background delivery; `:active()`, `:close()`; last lease disables it |
+| `gip.list{vendor_id?,product_id?,interface_guids?,wait_ms?}` | Connected custom-controller references; wait 0–10000 ms, default 500; up to 8 explicit GUIDs, requiring exact VID/PID |
+| `gip.watch(filter)` | `:next(timeout_ms)`, `:inspect()`, `:close()`; present/ready/added/removed, 500 ms observation interval |
+| `gip.open(reference,{message_class?,message_id?})` | Exact path/generation/VID/PID match; session-exclusive in this backend; optional filter for the channel's default queue |
+| `c:inspect()` / `c:close()` | Connection, counters, pending native operations / managed close |
+| `c:subscribe{message_class?,message_id?}` | Independent bounded stream with next/inspect/close; lifecycle events pass filters |
+| `c:read_message(timeout_ms?)` | Read the default queue; default 30000 ms, 0 is nonblocking, max 120000; timeout is `{kind='timeout'}` |
+| `c:send(class,id,Buffer,timeout_ms?)` | Exact granted packet; default 2000 ms, range 1–120000; means accepted by OS, not device acknowledgement |
+| `c:request(class,id,Buffer,matcher,timeout_ms?)` | Subscribe before sending, serialize requests, bounded matcher callback; no resend; timeout/overflow are errors |
+| `c:battery_info(timeout_ms?)` | Original Windows battery report/status/capacity fields, `precision='driver_defined'`; never derives a percentage |
+| `gamepad.battery_info(slot)` | Windows XInput slot 0–3: original battery type and empty/low/medium/full; percentage and charging remain unknown |
+
+Classes are `command`, `low_latency`, `standard_latency`; IDs and sequences are 0–255; payloads are at most 4096 bytes. Message events contain `kind='message'`, `message_class`, `message_id`, `sequence`, `timestamp` (opaque driver clock), `received_unix_ms`, `received_monotonic_ms` (backend-relative), `age_ms` (monotonic queue age when delivered to Lua), `actual_length`, `payload` (Buffer), and `payload_hex`. Buffer offsets start at zero. Callback payloads are not full USB wire frames: do not add or strip an assumed report ID. Validate the actual class, ID, length, marker and field ranges in the device's Lua protocol.
+
+A connection generation changes after reconnect. Rediscover and reopen; never reuse an old reference or infer physical identity from VID/PID. Preserve `os_id` only as a platform identifier and reject ambiguous matches. A GIP controller can disappear while its USB receiver remains plugged in. `input_suspended` indicates delivery suspension, not proven power-off. Disconnection closes queues and refuses queued telemetry as current. Stop/reset/plugin disable closes channels, streams and background leases. A native OS call cannot be forcibly cancelled: timeout does not roll back a transmitted packet, and its device lease stays held until the worker actually completes. Do not automatically resend a timed-out command.
+
+Each stream holds at most 128 events, each device at most 32 streams. Overflow is explicit. Filter to the required class/ID, drain bounded batches, discard stale samples using `age_ms`, and publish UI only when values change or their TTL needs renewal. Discovery registrations are process-scoped (64 hardware IDs, 32 interface GUIDs); restart the backend to clear them. Avoid registering speculative GUIDs.
+
+`gip.background()` requires an installed Microsoft GameInput v4 runtime (`GameInputRedist.dll` in the system directory). The loader requests the exact v4 IID; missing/older runtimes fail explicitly. This app does not install the runtime or enable Windows Developer Mode. Administrator rights alone do not guarantee every driver/OS will deliver background input. The Windows custom-controller aggregation adapter also uses an isolated, undocumented aggregation interface: this is a compatibility limitation, not a claim of universal Windows support. Inspect capabilities and diagnostics before assuming transport readiness.
+
+Read-only discovery example (no device commands):
+
+```lua
+local refs = gip.list{vendor_id=0x3537, product_id=0x105e, wait_ms=1000}
+return gip.capabilities(), refs, gip.diagnostics()
+```
+
+The verified G7 Pro protocol uses Command `0x0F` with payload `F2 00` to maintain its telemetry session. For this device only, Command `0x10` callbacks have 60 payload bytes starting `E0`; payload offsets 28/29 report charging (0/1) and battery (0–100). Do not copy these semantics to other devices. Receiver `3537:105E` and wired `3537:105D` are distinct references. A Windows synthesized report of 700/1000 or XInput FULL must not be presented as 70% or 100%. XInput slots are not mapped automatically to a GIP device.
+
+Exact permission example inside a static plugin.json permission group:
+
+```json
+{"permissions":[{"id":"known-heartbeat","title":"G7 Pro verified heartbeat","description":"Only the previously verified Command 0x0F / F2 00 session heartbeat; no configuration or firmware commands.","required":true,"policy":{"gip_write_rules":[{"vendor_id":13623,"product_id":4190,"message_class":"command","message_id":15,"packets":["f200"]}]}}]}
+```
+
+The host displays class, ID, VID/PID and full exact packets before granting. Add a separate exact rule for the wired PID if needed; no wildcard exists. A default REPL policy can contain the same `gip_write_rules`; a session-specific policy replaces it, and plugin grants remain isolated.
+
+Offline tests use `mock.gip(steps,{vendor_id=1,product_id=2})`. Writes still require policy grants for the mock IDs. Each send step has `op='send'`, class, ID, canonical `payload_hex`, and optional `messages={...}`; battery steps have `op='battery_info',result={...}`. Optional `delay_ms` (0–5000), `error`, and `disconnect` model failures. Message fields are class, ID, payload_hex and optional sequence/timestamp. No hardware is accessed. Test denied/mismatched sends, malformed lengths, unrelated packets, overflow, stale delivery, native completion after timeout, ambiguous discovery, stop/reset and reconnection. Mocks cannot establish driver or OS compatibility.
+
+CLI/JSON/MCP: `{"op":"gip","action":"capabilities"}`, `{"op":"gip","action":"diagnostics"}`, `{"op":"gip","action":"list","filter":{"vendor_id":13623,"product_id":4190}}`; `devices` / `device.list` also accept backend `gip`. Use `gip.open` for GIP, not HID's `device.open`. Optional standalone CLI: `peripheral-repl.exe --connect <endpoint> gip list --vendor-id 13623 --product-id 4190`. Lua eval remains the programming interface for send/decode/UI.
+
+Local validation, 2026-11-14: the integrated Rust/Lua backend received 938 valid receiver telemetry frames in a bounded 15-second elevated background test, using 50 known heartbeats; the device reported 80%, not charging. No vendor DLL, firmware/configuration writes or driver changes were used. This is a firmware report, not a measurement of physical battery accuracy; long-term operation and other Windows builds still require device testing.
+
+Headless management can invoke `peripheral-ui.exe --elevate-backend <workspace> <endpoint-file>`; it uses the same UAC flow and verified runtime handoff as Settings. Executable and endpoint paths are resolved before crossing the elevation boundary, including application-container redirects. The caller returns only after the new elevated runtime identity answers on the expected endpoint.

@@ -141,7 +141,7 @@ impl Runtime {
                 Ok(json!({"reset":name}))
             }
             "ping" => Ok(
-                json!({"runtime_id":self.inner.identity,"ui_protocol":peripheral_ui_protocol::VERSION,"plugin_api":2,"plugin_permissions":1,"version":env!("CARGO_PKG_VERSION"),"api_version":2,"policy":if self.shared.policy.name.is_empty(){"read-only"}else{&self.shared.policy.name},"root":self.inner.root,"transports":["hid","ble","mock"]}),
+                json!({"runtime_id":self.inner.identity,"ui_protocol":peripheral_ui_protocol::VERSION,"plugin_api":2,"plugin_permissions":1,"version":env!("CARGO_PKG_VERSION"),"api_version":2,"policy":if self.shared.policy.name.is_empty(){"read-only"}else{&self.shared.policy.name},"root":self.inner.root,"transports":["hid","ble","gip","mock"],"host":crate::host::status()}),
             ),
             "instances" => Ok(json!(
                 self.inner
@@ -152,13 +152,18 @@ impl Runtime {
                     .collect::<Vec<_>>()
             )),
             "devices" => {
-                if req["filter"]["backend"] == "ble" {
+                if req["filter"]["backend"] == "gip" {
+                    crate::gip::command_sync(
+                        json!({"action":"list","filter":req.get("filter").cloned().unwrap_or(json!({}))}),
+                    )
+                } else if req["filter"]["backend"] == "ble" {
                     crate::bluetooth::list_sync(req.get("filter").cloned().unwrap_or(json!({})))
                 } else {
                     bindings::enumerate(req.get("filter"))
                 }
             }
             "bluetooth" => crate::bluetooth::command_sync(req),
+            "gip" => crate::gip::command_sync(req),
             "events" => {
                 let after = req["after"].as_u64().unwrap_or(0);
                 let wait = req["wait_ms"].as_u64().unwrap_or(0).min(30000);

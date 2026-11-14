@@ -105,12 +105,16 @@ pub fn default_endpoint() -> PathBuf {
 }
 
 pub fn request(endpoint: &Path, command: Value) -> Result<Value> {
+    request_timeout(endpoint, command, Duration::from_secs(130))
+}
+/// Short control-plane deadlines must not inherit the long Lua evaluation timeout.
+pub fn request_timeout(endpoint: &Path, command: Value, timeout: Duration) -> Result<Value> {
     let endpoint: Endpoint = serde_json::from_str(&std::fs::read_to_string(endpoint)?)?;
     if !endpoint.address.ip().is_loopback() {
         bail!("endpoint must be loopback");
     }
     let mut stream = TcpStream::connect_timeout(&endpoint.address, Duration::from_secs(2))?;
-    stream.set_read_timeout(Some(Duration::from_secs(130)))?;
+    stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     serde_json::to_writer(
         &mut stream,
@@ -435,6 +439,14 @@ pub fn serve(
     Ok(())
 }
 
+pub fn prepare_endpoint_directory(endpoint: &Path) -> Result<()> {
+    let parent = endpoint
+        .parent()
+        .ok_or_else(|| anyhow!("endpoint directory required"))?;
+    let fresh = !parent.exists();
+    std::fs::create_dir_all(parent)?;
+    restrict_directory(parent, fresh)
+}
 fn restrict_directory(path: &Path, fresh: bool) -> Result<()> {
     #[cfg(windows)]
     {
@@ -445,9 +457,11 @@ fn restrict_directory(path: &Path, fresh: bool) -> Result<()> {
         } else {
             r#"$ErrorActionPreference='Stop'; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $acl=[System.IO.Directory]::GetAccessControl($env:PERIPHERAL_ENDPOINT_DIR); if (-not $acl.AreAccessRulesProtected) {throw 'Existing endpoint directory must have a private ACL; choose a new dedicated directory'}; foreach ($rule in $acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])) { if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference -ne $sid) {throw 'Existing endpoint directory permits another identity; choose a new dedicated directory'} }"#
         };
+        use std::os::windows::process::CommandExt;
         let status = std::process::Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
             .env("PERIPHERAL_ENDPOINT_DIR", path)
+            .creation_flags(0x08000000)
             .output()?;
         if !status.status.success() {
             bail!(

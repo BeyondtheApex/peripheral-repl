@@ -37,6 +37,7 @@ impl Completer for ShellHelper {
         let prefix = &line[start..pos];
         let words = [
             ":bluetooth ",
+            ":gip ",
             ":start",
             ":cancel ",
             ":actions",
@@ -44,6 +45,14 @@ impl Completer for ShellHelper {
             ":config",
             ":configure ",
             ":lifecycle",
+            "gip.list",
+            "gip.open",
+            "gip.watch",
+            "gip.capabilities",
+            "gip.diagnostics",
+            "gip.background",
+            "gamepad.battery_info",
+            "mock.gip",
             "ble.adapters",
             "ble.scan",
             "ble.list",

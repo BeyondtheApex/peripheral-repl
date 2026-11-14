@@ -968,6 +968,12 @@ pub fn install(lua: &Lua, ctx: &Context) -> mlua::Result<()> {
             let filter = filter
                 .map(|t| bindings::to_json(LV::Table(t), 0))
                 .transpose()?;
+            if filter.as_ref().is_some_and(|f| f["backend"] == "gip") {
+                let mut value = filter.unwrap();
+                value.as_object_mut().unwrap().remove("backend");
+                let filter = serde_json::from_value(value).map_err(mlua::Error::external)?;
+                return lua.to_value(&crate::gip::list(filter).await.map_err(Fault::lua)?);
+            }
             if filter.as_ref().is_some_and(|f| f["backend"] == "ble") {
                 return lua.to_value(
                     &crate::bluetooth::list(filter.unwrap())

@@ -141,6 +141,9 @@ pub fn policy(root: &Path, manifest: &Manifest) -> Result<Policy> {
         policy
             .ble_pair_rules
             .extend(request.policy.ble_pair_rules.clone());
+        policy
+            .gip_write_rules
+            .extend(request.policy.gip_write_rules.clone());
     }
     Ok(policy)
 }

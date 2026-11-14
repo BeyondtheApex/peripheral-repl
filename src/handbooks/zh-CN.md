@@ -355,7 +355,7 @@ config.define({type='object',additionalProperties=false,properties={
 
 ## 渲染位置偏好
 
-每个表面可声明 `position_preference={任务栏,速览}`，两个有符号 32 位整数，默认都是 0。第一个越大，任务栏项目越靠后（右）；第二个越大，速览项目越靠前（上），卡片和列表使用同一规则。相同偏好按会话 ID、表面 ID 稳定排序（区分大小写），与发布时机、修订号、标题和运行代次无关；插件的托管会话 ID 固定。修改偏好只重排已有内容，不创建新窗口或设备采样任务。
+每个表面可声明 `position_preference={任务栏,速览}`，两个有符号 32 位整数，默认都是 0。第一个越大，任务栏项目越靠外（左侧组靠左，右侧组靠右），空间不足时优先保留；第二个越大，速览项目越靠前（上），卡片和列表使用同一规则。相同偏好按会话 ID、表面 ID 稳定排序（区分大小写），与发布时机、修订号、标题和运行代次无关；插件的托管会话 ID 固定。修改偏好只重排已有内容，不创建新窗口或设备采样任务。
 
 ```lua
 ui.publish('battery', {
@@ -366,6 +366,22 @@ ui.position('battery', -5, 30) -- 只修改这个表面的排序
 ```
 
 在对应的每个 `taskbar`、`tray_card`、`tray_list` 表面上声明这两个值。其他目标忽略它；它不是 x/y 坐标，也不控制 Windows 独立托盘图标的顺序。`ui.position` 只修改当前会话已经发布的表面，返回修订号；数值不变时不产生新修订。`ui.update` 仍只修改节点。重新 publish 时不填该字段会恢复为零；持久化用户选择应由 Lua 配置或 storage 保存，启动发布时再次传入。UI 协议升为 6，防止新旧 GUI/后台混用；旧的 version=5 Lua 描述仍可使用。现有插件不改脚本也保留默认顺序。
+
+任务栏内容仅挂载在 Windows 主显示器。优先将节点的 XamlRoot 与诊断树中的 DesktopWindowXamlSource 对应，通过承载源接口取得原生窗口，再校验任务栏归属与主屏标记；同一线程可以有多个承载窗口，不按发现顺序或显示器宽度猜测。仅在系统未暴露承载源时使用唯一线程窗口作为后备，仍无法唯一确认时隐藏。切换主屏、插拔显示器或主屏分辨率变化后，客户端重新建立挂载；原生层在目标不再属于主屏时先隐藏旧内容。逻辑尺寸随纹理传输，避免不同显示器 DPI 导致显示尺寸及点击坐标错位。
+
+任务栏承载位置由客户端“设置 → 任务栏与更新 → 任务栏位置”决定：右侧贴着系统托盘左边，使用它与应用按钮之间的实测空闲区域；左侧在系统任务栏居中时贴着小组件右边，使用它与开始按钮之间的空闲区域，小组件隐藏时贴左侧边缘，左对齐时自动回退右侧。客户端会避开已识别的系统控件，包括开始、应用、小组件与整个系统托盘区域，不修改 Explorer 原有列宽或边距。
+
+空间不足时从外侧向中间保留连续项目（`position_preference[1]` 越大越先保留，同值按稳定 ID）；从中间低优先级一端整项隐藏，不缩小或截断单个项目，也不让较低优先级的小项目替代放不下的高优先级项目。可以全部隐藏，空间恢复后自动重新显示，Lua 表面与设备会话仍然存在，速览不受影响。分辨率、DPI、按钮及托盘边界变化通过 XAML 布局事件和 250ms 看门狗重新测量；无法确认开始按钮、坐标空间或有效尺寸时隐藏内容。设置页显示可见/总项目数和隐藏原因。当前仍为 Windows 11 私有布局集成，独立 XAML 测试不等于所有系统构建均已实机验证。升级此功能需要配套 EXE/DLL；已经加载旧 DLL 的 Explorer 需要正常重启后才能使用新版。
+
+更新流程使用安装目录下的 `updates/pending`、`updates/previous` 和 `updates/result.json`。准备完成后暂停加载旧 DLL。更新辅助进程复制自当前运行的 EXE，位于 `updates/runner/<UUID>/peripheral-ui.exe`，避免依赖待安装版本对命令行的解释；在 UI 退出前完成包校验、父进程句柄及 Explorer 重启权限检查和确认握手。确认应用更新后，正常关闭本安装的后台，等待旧 UI 退出，替换并校验配套 EXE/DLL，随后恢复 UI、后台和已启用插件。Lua 内存会话不跨更新保留。文件替换失败会尝试回滚两份二进制及清单，待安装包保留；已替换成功但 Explorer 恢复失败会单独报告，避免重复应用。
+
+旧版 Restart Manager 的错误 351 是 `ERROR_FAIL_SHUTDOWN`，不表示 HID 失败。新版重启请求有时限，新 UI 确认后才允许在正常退出超时后结束主任务栏所属的 Explorer 进程；文件操作可能中断。旧 UI 的请求不隐式获得此权限。不要连续点击或同时手动/自动更新。挂载失败时保留最新 bridge 的 `taskbar-trace.jsonl`、`consumer.json`（若存在）、系统版本和 `updates/result.json`；单独的“超时”不足以判断主屏筛选、原生加载或旧 DLL 冲突。
+
+更新状态不能只看历史 `applied` 文字。每次准备或启动更新都会刷新 `updates/result.json`，包含时间、安装路径、执行更新的 EXE 路径及包清单哈希；阶段记录追加到 `updates/history.jsonl`。启动时若存在 ready 标记，会校验待安装包并比较安装目录中两份实际文件的 SHA-256，只有两份都一致才恢复残留标记，不重装或覆盖 previous 备份。同一二进制包不能重复准备。若另一台电脑状态矛盾，用新版 EXE 执行 `peripheral-ui.exe --update-report "实际安装目录"`，将生成该目录下的 `updates/diagnostics.json`；报告包含安装/待安装/备份文件的实际哈希、标记、历史结果、正在运行的 UI 完整路径及 Explorer 加载的 DLL。此命令不加载 DLL、不启动后台、不重启 Explorer。
+
+未启动后台、未发布任务栏内容或未挂载不是更新的前置条件。更新时只关闭本安装的后台；其他安装的后台不受影响。只有 Explorer 实际加载本安装 DLL 时才为更新重启 Explorer，与“任务栏启用”选项无关。原先停止的后台保持停止；正在运行的后台恢复。单独的“重启资源管理器”按钮仍执行重启。
+
+托盘避让以系统托盘外框为边界，不重复计算内部展开/折叠动画中的子控件；外框真实变宽、分辨率或 DPI 改变仍重新布局。内置速览与右键菜单以系统返回的托盘图标矩形定位，避免不同点击位置造成横向漂移。
 
 ## HID 契约、例外与离线验证
 
@@ -384,3 +400,61 @@ HID 标准定义报告类型、ID、描述符长度；电量百分比、充电�
 - 微软： https://learn.microsoft.com/en-us/windows-hardware/drivers/hid/obtaining-hid-reports
 - HIDAPI API 契约： https://libusb.info/hidapi/group__API.html
 - 锁定版本实现：`hidapi` 2.6.7 的 `etc/hidapi/windows/hid.c`，`hid_get_report`/`hid_get_input_report`（Cargo 依赖源码内）。
+
+
+## 通用 GIP 与手柄电量接口
+
+应用更新会保留后台之前的启动模式：原来停止的后台不会自动启动，普通后台按普通权限恢复，管理员后台由普通权限 GUI 重新请求 UAC 后恢复。取消这次 UAC 时后台保持停止，可在设置里重新启动；更新不会静默绕过系统授权。
+
+GIP 是与 HID、BLE 并列的 Windows 手柄通道。Rust 负责枚举、连接代次、回调、有界队列、取消与精确报文授权；厂商协议、查询、心跳、解析、过期状态和 UI 全部由 Lua 决定。Rust 不会自动发心跳、猜电量偏移、替换驱动或调用固件升级。
+
+分发结构仍是 `peripheral-ui.exe` 与任务栏 DLL；同一个 EXE 的 `--daemon` 模式运行后台，不新增 GIP 服务或厂商 DLL。在**设置 → 后台设备访问权限**启动管理员后台，GUI 和 MCP 桥接保持普通权限，继续连接原来的受保护端点。先获得 UAC 授权，再停止旧后台，取消 UAC 不会关掉现有后台。重启保留当前权限模式；停止后再普通启动可恢复普通权限。提权不会放宽插件的报文授权。必须使用同一 Windows 用户，不能切换另一个管理员账户。
+
+| Lua API | 契约 |
+|---|---|
+| `gip.capabilities()` | 平台能力、进程 `host.elevated` 与限制；不代表具体设备已就绪 |
+| `gip.diagnostics()` | 当前后台最近 64 条注册、聚合阶段记录；仅元数据 |
+| `gip.background()` | 请求 GameInput v4 后台接收，返回会话管理的租约；`:active()`、`:close()`，最后一个租约释放后关闭请求 |
+| `gip.list{vendor_id?,product_id?,interface_guids?,wait_ms?}` | 已连接的自定义控制器引用；等待默认 500、允许 0–10000 毫秒；最多 8 个显式 GUID，要求同时指定 VID/PID |
+| `gip.watch(filter)` | `:next(timeout_ms)`、`:inspect()`、`:close()`；present/ready/added/removed，500 毫秒观察间隔 |
+| `gip.open(reference,{message_class?,message_id?})` | 校验 path/generation/VID/PID，在同一后台内按会话独占；可过滤默认接收队列 |
+| `c:inspect()` / `c:close()` | 查看连接、计数、未结束的原生操作 / 关闭资源 |
+| `c:subscribe{message_class?,message_id?}` | 独立的有界订阅，支持 next/inspect/close；生命周期事件不被报文过滤器丢弃 |
+| `c:read_message(timeout_ms?)` | 默认队列；默认 30000、最大 120000 毫秒；0 表示非阻塞，超时返回 `{kind='timeout'}` |
+| `c:send(class,id,Buffer,timeout_ms?)` | 必须精确授权；默认 2000，允许 1–120000 毫秒；成功仅表示系统接受，不等于设备确认 |
+| `c:request(class,id,Buffer,matcher,timeout_ms?)` | 先订阅再发送，串行请求、有界匹配回调；不重发；超时或溢出报错 |
+| `c:battery_info(timeout_ms?)` | Windows 原始状态与容量字段，`precision='driver_defined'`；不换算精确百分比 |
+| `gamepad.battery_info(slot)` | XInput 槽位 0–3：原始电池类型、empty/low/medium/full；百分比和充电状态保持未知 |
+
+消息类别为 `command`、`low_latency`、`standard_latency`；ID/sequence 为 0–255，payload 最大 4096 字节。消息包含 `kind='message'`、`message_class`、`message_id`、`sequence`、`timestamp`（驱动时钟，不当作墙钟）、`received_unix_ms`、`received_monotonic_ms`（后台相对时钟）、`age_ms`（交付 Lua 时的单调队列年龄）、`actual_length`、`payload` Buffer 和 `payload_hex`。Buffer 偏移从 0 开始。回调 payload 并非完整 USB 帧，不要擅自插入或剥离 Report ID；由设备协议检查类别、ID、实际长度、标记和数值范围。
+
+重连会产生新 generation，必须重新枚举并打开，不能复用旧引用或凭 VID/PID 推断物理身份。`os_id` 仅作为平台标识，多个匹配必须明确选择。接收器还插着时，GIP 控制器可能已经消失；`input_suspended` 表示投递暂停，不证明设备关机。断连会关闭队列并拒绝把积压报文当作当前数据。停止、重置、禁用插件会关闭通道、订阅和后台租约。原生系统调用无法强制取消：超时不会撤销已发送报文，其设备租约保留到原生操作实际完成；不要自动重发超时命令。
+
+每队列最多 128 个事件，每设备最多 32 个订阅，溢出会显式报告。过滤所需类别/ID，分批排空队列，根据 `age_ms` 丢弃过期帧；仅在值变化或需要续期 TTL 时发布 UI。硬件/GUID 注册属于进程，最多 64 个硬件 ID、32 个接口 GUID；重启后台清空。不要猜 GUID 批量尝试。
+
+`gip.background()` 需要系统目录中已安装的 Microsoft GameInput v4（`GameInputRedist.dll`），通过精确 v4 IID 验证版本，缺失/旧版本明确失败。程序不会自行安装运行库或开启开发者模式。管理员权限也不保证所有驱动与系统都能后台接收。Windows 自定义控制器聚合适配器还依赖隔离封装的未公开聚合接口，不能承诺所有 Windows 版本兼容；请用 capabilities 和 diagnostics 判断实际就绪状态。
+
+只读枚举示例，不发送设备命令：
+
+```lua
+local refs = gip.list{vendor_id=0x3537, product_id=0x105e, wait_ms=1000}
+return gip.capabilities(), refs, gip.diagnostics()
+```
+
+已验证的 G7 Pro 协议使用 Command `0x0F`、固定 `F2 00` 维持遥测会话。仅对此设备，Command `0x10` 的回调 payload 长 60、首字节 `E0`；偏移 28 为充电 0/1，偏移 29 为电量 0–100。不要照搬给其他设备。接收器 `3537:105E` 和有线 `3537:105D` 是不同引用。Windows 合成的 700/1000 或 XInput FULL 不可显示为精确 70%/100%；XInput 槽位不会自动绑定到 GIP 设备。
+
+静态 plugin.json 的精确授权示例：
+
+```json
+{"permissions":[{"id":"known-heartbeat","title":"G7 Pro 已验证心跳","description":"仅允许已验证的 Command 0x0F / F2 00 会话心跳，无配置或固件命令。","required":true,"policy":{"gip_write_rules":[{"vendor_id":13623,"product_id":4190,"message_class":"command","message_id":15,"packets":["f200"]}]}}]}
+```
+
+授权 UI 展示类别、ID、VID/PID 和完整报文；需要有线模式时新增其精确 PID 规则，不支持通配符。全局默认 REPL 策略也可含 `gip_write_rules`，会话自身策略整体覆盖默认策略，插件授权保持隔离。
+
+离线回放：`mock.gip(steps,{vendor_id=1,product_id=2})`，回放写操作同样要求这些模拟 ID 的策略授权。发送步骤包含 `op='send'`、message_class、message_id、规范小写 payload_hex，可带 `messages={...}`；系统电量步骤为 `op='battery_info',result={...}`。可选 delay_ms（0–5000）、error、disconnect 模拟故障。消息字段为类别、ID、payload_hex，可选 sequence/timestamp。回放不接触硬件。应测试拒绝授权、错误报文、长度/无关包、队列溢出、旧帧、超时后原生完成、歧义枚举、停止/重置与重连；回放不能证明驱动或系统兼容。
+
+CLI/JSON/MCP：`{"op":"gip","action":"capabilities"}`、`{"op":"gip","action":"diagnostics"}`、`{"op":"gip","action":"list","filter":{"vendor_id":13623,"product_id":4190}}`；devices / device.list 也支持 backend 为 gip。打开 GIP 用 `gip.open`，不要调用 HID 的 device.open。可选独立 CLI：`peripheral-repl.exe --connect <endpoint> gip list --vendor-id 13623 --product-id 4190`；发送、解析和 UI 继续使用 Lua eval。
+
+本机验证（2026-11-14）：集成后的 Rust/Lua 后台在 15 秒管理员后台测试中，用 50 次已知心跳收到了 938 帧有效接收器电量，设备上报 80%、未充电。没有厂商 DLL、固件/配置写入或驱动修改。这是固件上报值，非电池物理精度测量；长期运行与其他 Windows 版本仍需硬件验证。
+
+无界面管理可调用 `peripheral-ui.exe --elevate-backend <workspace> <endpoint-file>`，使用与设置页相同的 UAC 和后台身份交接流程。提权前解析 EXE 与端点的实际路径，包含应用容器的目录重定向；仅在预期端点确认新管理员后台身份后才报告成功。

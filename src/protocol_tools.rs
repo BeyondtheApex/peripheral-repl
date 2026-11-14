@@ -39,7 +39,7 @@ pub fn list() -> Value {
         }
     }
     properties.extend([
-        ("op".into(),json!({"type":"string","enum":["plugins","plugin_enable","plugin_restart","plugin_configure","plugin_install","plugin_permissions","plugin_permissions_save","session_policy","plugins_restore","scripts","script_read","script_import","ui_environment","ui_snapshot","ui_event","ui_dismiss","device_snapshot","config_description","reset","ping","devices","bluetooth","instances","create","eval","load","reload","tasks","stats","pause","resume","stop","destroy","snapshot","events","cancel","actions","invoke","configure","config","start","lifecycle"]})),
+        ("op".into(),json!({"type":"string","enum":["plugins","plugin_enable","plugin_restart","plugin_configure","plugin_install","plugin_permissions","plugin_permissions_save","session_policy","plugins_restore","scripts","script_read","script_import","ui_environment","ui_snapshot","ui_event","ui_dismiss","device_snapshot","config_description","reset","ping","devices","bluetooth","gip","instances","create","eval","load","reload","tasks","stats","pause","resume","stop","destroy","snapshot","events","cancel","actions","invoke","configure","config","start","lifecycle"]})),
         ("revision".into(),json!({"type":["integer","string"]})),
         ("node".into(),json!({"type":["string","null"]})),
         ("button".into(),json!({"type":"string","enum":["left","right"]})),
@@ -49,7 +49,7 @@ pub fn list() -> Value {
         ("wait_ms".into(),json!({"type":"integer","maximum":30000})),
     ]);
     json!({"tools":[
-        {"name":"peripheral_command","description":"Control the shared Lua runtime, plugins, device permissions, BLE/HID, configuration and UI. Read peripheral_docs first. Inspect plugin_permissions and ask the user before granting exact device operations with plugin_permissions_save. Unknown device reports must never be sent speculatively. session_policy inspects effective grants; create accepts a policy override for an independent debugging session.","inputSchema":{"type":"object","properties":properties,"required":["op"],"additionalProperties":false}},
+        {"name":"peripheral_command","description":"Control the shared Lua runtime, plugins, device permissions, BLE/HID/GIP, configuration and UI. Read peripheral_docs first. Inspect plugin_permissions and ask the user before granting exact device operations with plugin_permissions_save. Unknown device reports must never be sent speculatively. session_policy inspects effective grants; create accepts a policy override for an independent debugging session.","inputSchema":{"type":"object","properties":properties,"required":["op"],"additionalProperties":false}},
         {"name":"peripheral_docs","description":"Read the bundled human/AI handbook before writing plugins or debugging devices. No backend or hardware connection needed.","annotations":{"readOnlyHint":true,"openWorldHint":false},"inputSchema":{"type":"object","properties":{"language":{"type":"string","enum":["zh-CN","en"]}},"required":["language"],"additionalProperties":false}}
     ]})
 }

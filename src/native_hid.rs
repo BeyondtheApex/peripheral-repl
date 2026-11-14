@@ -1,4 +1,4 @@
-//! Native HID calls run in a disposable subprocess, never in the Lua host.
+//! Native HID calls run in isolated subprocesses, never in the Lua host.
 use crate::{
     bindings::{hex, unhex},
     error::Fault,
@@ -6,14 +6,13 @@ use crate::{
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    process::{Child, ChildStdin, Command, Stdio},
-    sync::{Mutex, mpsc},
+    sync::{Mutex, OnceLock, mpsc},
     time::Duration,
 };
 
 struct Process {
-    child: Child,
-    input: ChildStdin,
+    child: child::Child,
+    input: Box<dyn Write + Send>,
     output: mpsc::Receiver<Value>,
     dead: bool,
 }
@@ -27,6 +26,10 @@ pub struct NativeHid {
     process: Mutex<Process>,
     input_reports: bool,
 }
+mod child;
+mod discovery;
+#[cfg(windows)]
+mod windows_worker;
 fn descriptor_has_input(bytes: &[u8]) -> Option<bool> {
     let parsed = crate::hid_descriptor::parse(bytes).ok()?;
     let reports = parsed["reports"].as_array()?;
@@ -49,11 +52,26 @@ impl NativeHid {
                     "peripheral-repl"
                 });
         }
-        let mut command = Command::new(executable);
-        command.arg("--native-hid-worker");
-        Self::spawn_command(command)
+        #[cfg(windows)]
+        {
+            let (child, input, output) = windows_worker::spawn(&executable)
+                .map_err(|e| Fault::new("backend", "hid.worker", e))?;
+            Ok(Self::from_parts(
+                child::Child::Native(child),
+                Box::new(input),
+                Box::new(output),
+            ))
+        }
+        #[cfg(not(windows))]
+        {
+            let mut command = std::process::Command::new(executable);
+            command.arg("--native-hid-worker");
+            Self::spawn_command(command)
+        }
     }
-    fn spawn_command(mut command: Command) -> Result<Self, Fault> {
+    #[cfg(any(not(windows), test))]
+    fn spawn_command(mut command: std::process::Command) -> Result<Self, Fault> {
+        use std::process::Stdio;
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -68,6 +86,17 @@ impl NativeHid {
             .map_err(|e| Fault::new("backend", "hid.worker", e))?;
         let input = child.stdin.take().unwrap();
         let output = child.stdout.take().unwrap();
+        Ok(Self::from_parts(
+            child::Child::Standard(child),
+            Box::new(input),
+            Box::new(output),
+        ))
+    }
+    fn from_parts(
+        child: child::Child,
+        input: Box<dyn Write + Send>,
+        output: Box<dyn Read + Send>,
+    ) -> Self {
         let (tx, rx) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
             let mut reader = BufReader::new(output);
@@ -91,7 +120,7 @@ impl NativeHid {
                 }
             }
         });
-        let h = Self {
+        Self {
             input_reports: true,
             process: Mutex::new(Process {
                 child,
@@ -99,8 +128,7 @@ impl NativeHid {
                 output: rx,
                 dead: false,
             }),
-        };
-        Ok(h)
+        }
     }
     pub fn open(path: &str) -> Result<Self, Fault> {
         let mut h = Self::spawn()?;
@@ -112,7 +140,12 @@ impl NativeHid {
         self.input_reports
     }
     pub fn enumerate(filter: Option<&Value>) -> Result<Value, Fault> {
-        Self::spawn()?.call(json!({"op":"enumerate","filter":filter}))
+        static WORKER: OnceLock<Mutex<discovery::Discovery>> = OnceLock::new();
+        WORKER
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .enumerate(filter)
     }
     pub fn call(&self, request: Value) -> Result<Value, Fault> {
         let mut p = self.process.lock().unwrap();
@@ -211,6 +244,13 @@ pub fn serve() -> anyhow::Result<()> {
         let request: Value = serde_json::from_str(&line)?;
         let result = (|| -> anyhow::Result<Value> {
             let op = request["op"].as_str().unwrap_or("");
+            if op == "ping" {
+                #[cfg(windows)]
+                let quiet = windows_worker::feedback_disabled();
+                #[cfg(not(windows))]
+                let quiet = true;
+                return Ok(json!({"pid":std::process::id(),"startup_feedback_disabled":quiet}));
+            }
             if op == "enumerate" {
                 return crate::bindings::enumerate_local(
                     request.get("filter").filter(|v| !v.is_null()),
@@ -275,7 +315,8 @@ pub fn serve() -> anyhow::Result<()> {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
-    fn ready_worker(script: &str) -> NativeHid {
+    use std::process::Command;
+    pub(super) fn ready_worker(script: &str) -> NativeHid {
         let mut command = Command::new("powershell.exe");
         command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
         let worker = NativeHid::spawn_command(command).unwrap();
